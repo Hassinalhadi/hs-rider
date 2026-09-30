@@ -1,0 +1,11 @@
+package k;
+
+import android.widget.PopupWindow;
+
+/* compiled from: r8-map-id-490f0dba1d768a4affb4e870be6bc488cb830058e87a4b15c3a9e69aab618a3c */
+/* loaded from: classes.dex */
+public abstract class d2 {
+    public static void a(PopupWindow popupWindow, boolean z2) {
+        popupWindow.setTouchModal(z2);
+    }
+}
