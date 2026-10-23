@@ -1,0 +1,816 @@
+name: Build Modern HS Rider APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Upgrade & Build Signed HS Rider v2.0 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Clean Legacy Artifacts & Inject Modernized HS Rider v2.0 Sources
+        run: |
+          set -e
+
+          # 1. Remove raw DEX/binary leftovers from JADX export
+          rm -rf app/src/main/classes.dex                  app/src/main/DebugProbesKt.bin                  app/src/main/META-INF                  app/src/main/kotlin                  app/src/main/assets/dexopt                  /tmp/hs_backup                  /tmp/res_backup
+
+          # 2. Recreate clean Java package directories
+          rm -rf app/src/main/java/*
+          mkdir -p app/src/main/java/h2                    app/src/main/java/i2                    app/src/main/java/com/logistics/rider/lsposed/xposed
+
+          # Write upgraded h2/a.java (Coherent 2025/2026 Flagship Device Profiles - Android 14/15)
+          cat << 'EOF' > app/src/main/java/h2/a.java
+          package h2;
+
+          public abstract class a {
+              // BRAND
+              public static final String[] f1907a = {
+                  "samsung", "samsung", "google", "Xiaomi", "OnePlus",
+                  "vivo", "OPPO", "realme", "HONOR", "Sony"
+              };
+
+              // MANUFACTURER
+              public static final String[] f1908b = {
+                  "Samsung Electronics", "Samsung Electronics", "Google", "Xiaomi", "OnePlus",
+                  "vivo", "OPPO", "realme", "HONOR", "Sony"
+              };
+
+              // MODEL
+              public static final String[] f1909c = {
+                  "SM-S938B", "SM-S928B", "Pixel 9 Pro XL", "2410DPN6CC", "CPH2653",
+                  "V2405A", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
+              };
+
+              // DEVICE
+              public static final String[] d = {
+                  "pa3q", "e3q", "komodo", "haotian", "OP5D0DL1",
+                  "PD2405", "OP5CF9L1", "RE6018L1", "HNP-PTP", "pdx245"
+              };
+
+              // BOARD / HARDWARE
+              public static final String[] f1910e = {
+                  "sun", "pineapple", "caiman", "sun", "sun",
+                  "mt6991", "mt6991", "sun", "sun", "pineapple"
+              };
+
+              // PRODUCT
+              public static final String[] f1911f = {
+                  "pa3qxxx", "e3qxxx", "komodo", "haotian", "CPH2653",
+                  "PD2405", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
+              };
+
+              // BOOTLOADER
+              public static final String[] f1912g = {
+                  "S938BXXU1AYA1", "S928BXXS4AXL1", "ripcurrent-15.1-12491234", "haotian-2.0.102.0", "unknown",
+                  "unknown", "unknown", "unknown", "unknown", "unknown"
+              };
+
+              // FINGERPRINT (Coherent with each index above)
+              public static final String[] h = {
+                  "samsung/pa3qxxx/pa3q:15/AP3A.240905.015.A2/S938BXXU1AYA1:user/release-keys",
+                  "samsung/e3qxxx/e3q:14/UP1A.231005.007/S928BXXS4AXL1:user/release-keys",
+                  "google/komodo/komodo:15/AP4A.250105.002/12701944:user/release-keys",
+                  "Xiaomi/haotian/haotian:15/AQ3A.240812.002/OS2.0.102.0.VOBCNXM:user/release-keys",
+                  "OnePlus/CPH2653/OP5D0DL1:15/AP3A.240617.008/U.R4T3.1731564:user/release-keys",
+                  "vivo/PD2405/PD2405:15/AP3A.240905.015.A2/compiler11201512:user/release-keys",
+                  "OPPO/CPH2659/OP5CF9L1:15/AP3A.240617.008/S.1829310:user/release-keys",
+                  "realme/RMX5011/RE6018L1:15/AP3A.240617.008/R.1920142:user/release-keys",
+                  "HONOR/PTP-N49/HNP-PTP:15/HONORPTP-N49/9.0.0.132C185:user/release-keys",
+                  "Sony/XQ-EC54/pdx245:15/69.1.A.2.100/069001A002010000:user/release-keys"
+              };
+          }
+          EOF
+
+          # Write upgraded i2/a.java (Safe serializer, boolean false & Play Store installer hook)
+          cat << 'EOF' > app/src/main/java/i2/a.java
+          package i2;
+
+          import de.robv.android.xposed.XC_MethodHook;
+
+          public final class a extends XC_MethodHook {
+              public final int f1994a;
+
+              public a(int i3) {
+                  this.f1994a = i3;
+              }
+
+              @Override
+              protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
+                  if (methodHookParam == null) return;
+                  switch (this.f1994a) {
+                      case 0:
+                          methodHookParam.setResult(null);
+                          return;
+                      case 2:
+                          methodHookParam.setResult(Boolean.FALSE);
+                          return;
+                      default:
+                          methodHookParam.setResult("com.android.vending");
+                          return;
+                  }
+              }
+          }
+          EOF
+
+          # Write upgraded i2/b.java (Coherent Device + XSharedPreferences + SystemProperties + Android ID + Anti-Detection)
+          cat << 'EOF' > app/src/main/java/i2/b.java
+          package i2;
+
+          import android.app.Application;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.os.Build;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XSharedPreferences;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+          import java.util.Objects;
+          import java.util.concurrent.ThreadLocalRandom;
+
+          public final class b extends XC_MethodHook {
+              public final int f1995a;
+              public final Object f1996b;
+
+              public static volatile String sBrand;
+              public static volatile String sManufacturer;
+              public static volatile String sModel;
+              public static volatile String sDevice;
+              public static volatile String sBoard;
+              public static volatile String sProduct;
+              public static volatile String sBootloader;
+              public static volatile String sFingerprint;
+              public static volatile String sAndroidId;
+
+              public b(int i3, Object obj) {
+                  this.f1995a = i3;
+                  this.f1996b = obj;
+              }
+
+              public static String generateRandomHex(int len) {
+                  String hex = "0123456789abcdef";
+                  StringBuilder sb = new StringBuilder(len);
+                  ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                  for (int i = 0; i < len; i++) {
+                      sb.append(hex.charAt(rnd.nextInt(16)));
+                  }
+                  return sb.toString();
+              }
+
+              public static void applyBuildSpoof(ClassLoader cl) {
+                  if (sBrand == null) return;
+                  try {
+                      Class<?> buildClass = cl != null ? cl.loadClass("android.os.Build") : Build.class;
+                      XposedHelpers.setStaticObjectField(buildClass, "BRAND", sBrand);
+                      XposedHelpers.setStaticObjectField(buildClass, "MANUFACTURER", sManufacturer);
+                      XposedHelpers.setStaticObjectField(buildClass, "MODEL", sModel);
+                      XposedHelpers.setStaticObjectField(buildClass, "DEVICE", sDevice);
+                      XposedHelpers.setStaticObjectField(buildClass, "BOARD", sBoard);
+                      XposedHelpers.setStaticObjectField(buildClass, "HARDWARE", sBoard);
+                      XposedHelpers.setStaticObjectField(buildClass, "PRODUCT", sProduct);
+                      XposedHelpers.setStaticObjectField(buildClass, "BOOTLOADER", sBootloader);
+                      XposedHelpers.setStaticObjectField(buildClass, "FINGERPRINT", sFingerprint);
+                      XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
+                      XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: Failed to set Build fields: " + t.getMessage());
+                  }
+              }
+
+              public static void loadFromXSharedPrefs() {
+                  try {
+                      XSharedPreferences xprefs = new XSharedPreferences("com.logistics.rider.lsposed", "com.logistics.rider.settings");
+                      xprefs.reload();
+                      String brand = xprefs.getString("brand", null);
+                      if (brand != null && !brand.isEmpty()) {
+                          sBrand = brand;
+                          sManufacturer = xprefs.getString("manufacturer", sManufacturer);
+                          sModel = xprefs.getString("model", sModel);
+                          sDevice = xprefs.getString("device", sDevice);
+                          sBoard = xprefs.getString("board", sBoard);
+                          sProduct = xprefs.getString("product", sProduct);
+                          sBootloader = xprefs.getString("bootloader", sBootloader);
+                          sFingerprint = xprefs.getString("fingerprint", sFingerprint);
+                          sAndroidId = xprefs.getString("android_id", sAndroidId);
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              public static void initAndSpoofFromContext(Context context, ClassLoader cl) {
+                  loadFromXSharedPrefs();
+                  if (context == null) {
+                      applyBuildSpoof(cl);
+                      return;
+                  }
+                  SharedPreferences prefs = context.getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
+                  int count = h2.a.f1907a.length;
+                  int idx = ThreadLocalRandom.current().nextInt(count);
+
+                  if (!prefs.getBoolean("spoof_device_v2", false)) {
+                      String brand = sBrand != null ? sBrand : h2.a.f1907a[idx];
+                      String manufacturer = sManufacturer != null ? sManufacturer : h2.a.f1908b[idx];
+                      String model = sModel != null ? sModel : h2.a.f1909c[idx];
+                      String device = sDevice != null ? sDevice : h2.a.d[idx];
+                      String board = sBoard != null ? sBoard : h2.a.f1910e[idx];
+                      String product = sProduct != null ? sProduct : h2.a.f1911f[idx];
+                      String bootloader = sBootloader != null ? sBootloader : h2.a.f1912g[idx];
+                      String fingerprint = sFingerprint != null ? sFingerprint : h2.a.h[idx];
+                      String androidId = sAndroidId != null ? sAndroidId : generateRandomHex(16);
+
+                      prefs.edit()
+                          .putString("brand", brand)
+                          .putString("manufacturer", manufacturer)
+                          .putString("model", model)
+                          .putString("device", device)
+                          .putString("board", board)
+                          .putString("product", product)
+                          .putString("bootloader", bootloader)
+                          .putString("fingerprint", fingerprint)
+                          .putString("android_id", androidId)
+                          .putBoolean("spoof_device", true)
+                          .putBoolean("spoof_device_v2", true)
+                          .apply();
+                  }
+
+                  sBrand = prefs.getString("brand", h2.a.f1907a[idx]);
+                  sManufacturer = prefs.getString("manufacturer", h2.a.f1908b[idx]);
+                  sModel = prefs.getString("model", h2.a.f1909c[idx]);
+                  sDevice = prefs.getString("device", h2.a.d[idx]);
+                  sBoard = prefs.getString("board", h2.a.f1910e[idx]);
+                  sProduct = prefs.getString("product", h2.a.f1911f[idx]);
+                  sBootloader = prefs.getString("bootloader", h2.a.f1912g[idx]);
+                  sFingerprint = prefs.getString("fingerprint", h2.a.h[idx]);
+                  sAndroidId = prefs.getString("android_id", generateRandomHex(16));
+
+                  // Override with latest values from module UI if available
+                  loadFromXSharedPrefs();
+                  applyBuildSpoof(cl);
+              }
+
+              @Override
+              protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
+                  if (methodHookParam == null) return;
+                  switch (this.f1995a) {
+                      case 0: // getInstallerPackageName(String)
+                          if (methodHookParam.args.length > 0 && Objects.equals(methodHookParam.args[0], this.f1996b)) {
+                              methodHookParam.setResult("com.android.vending");
+                          }
+                          return;
+                      case 1: // Application.attach(Context) or Application.onCreate()
+                          ClassLoader cl = (ClassLoader) this.f1996b;
+                          Context ctx = null;
+                          if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof Context) {
+                              ctx = (Context) methodHookParam.args[0];
+                          } else if (methodHookParam.thisObject instanceof Application) {
+                              ctx = (Application) methodHookParam.thisObject;
+                          }
+                          initAndSpoofFromContext(ctx, cl);
+                          return;
+                      case 2: // Settings.Secure.getString(ContentResolver, String)
+                          if (methodHookParam.args.length >= 2 && "android_id".equals(methodHookParam.args[1])) {
+                              if (sAndroidId != null) {
+                                  methodHookParam.setResult(sAndroidId);
+                              }
+                          }
+                          return;
+                      case 3: // Settings.Global.getInt / Settings.Secure.getInt (ADB / Dev Options / Mock Location)
+                          if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof String) {
+                              String key = (String) methodHookParam.args[1];
+                              if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
+                                  methodHookParam.setResult(0);
+                              }
+                          }
+                          return;
+                      case 4: // SystemProperties.get(String) / get(String, String)
+                          if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
+                              String prop = (String) methodHookParam.args[0];
+                              if ("ro.product.brand".equals(prop) && sBrand != null) methodHookParam.setResult(sBrand);
+                              else if ("ro.product.manufacturer".equals(prop) && sManufacturer != null) methodHookParam.setResult(sManufacturer);
+                              else if ("ro.product.model".equals(prop) && sModel != null) methodHookParam.setResult(sModel);
+                              else if ("ro.product.device".equals(prop) && sDevice != null) methodHookParam.setResult(sDevice);
+                              else if ("ro.product.board".equals(prop) && sBoard != null) methodHookParam.setResult(sBoard);
+                              else if ("ro.product.name".equals(prop) && sProduct != null) methodHookParam.setResult(sProduct);
+                              else if ("ro.bootloader".equals(prop) && sBootloader != null) methodHookParam.setResult(sBootloader);
+                              else if ("ro.build.fingerprint".equals(prop) && sFingerprint != null) methodHookParam.setResult(sFingerprint);
+                              else if ("ro.build.tags".equals(prop)) methodHookParam.setResult("release-keys");
+                              else if ("ro.build.type".equals(prop)) methodHookParam.setResult("user");
+                              else if ("ro.debuggable".equals(prop)) methodHookParam.setResult("0");
+                              else if ("ro.secure".equals(prop)) methodHookParam.setResult("1");
+                          }
+                          return;
+                      case 5: // File.exists() - hide su / root / magisk paths
+                          if (methodHookParam.thisObject instanceof java.io.File) {
+                              String path = ((java.io.File) methodHookParam.thisObject).getAbsolutePath();
+                              if (path != null && (path.endsWith("/su") || path.endsWith("/busybox")
+                                      || path.contains("magisk") || path.contains("Superuser")
+                                      || path.contains("kernelsu") || path.contains("apatch")
+                                      || path.contains("lsposed") || path.contains("xposed"))) {
+                                  methodHookParam.setResult(Boolean.FALSE);
+                              }
+                          }
+                          return;
+                      case 6: // PackageManager.getPackageInfo(String, int) - hide module, LSPosed, Magisk, KernelSU
+                          if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
+                              String pkgName = (String) methodHookParam.args[0];
+                              if ("com.logistics.rider.lsposed".equals(pkgName)
+                                      || "com.topjohnwu.magisk".equals(pkgName)
+                                      || "org.lsposed.manager".equals(pkgName)
+                                      || "de.robv.android.xposed.installer".equals(pkgName)
+                                      || "me.weishu.kernelsu".equals(pkgName)) {
+                                  methodHookParam.setThrowable(new PackageManager.NameNotFoundException(pkgName));
+                              }
+                          }
+                          return;
+                      default:
+                          return;
+                  }
+              }
+          }
+          EOF
+
+          # Write upgraded XposedInit.java with fault-tolerant isolated hooks
+          cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/xposed/XposedInit.java
+          package com.logistics.rider.lsposed.xposed;
+
+          import android.app.Application;
+          import android.content.ContentResolver;
+          import android.content.Context;
+          import android.location.Location;
+          import android.os.Build;
+          import android.provider.Settings;
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+          import i2.a;
+          import i2.b;
+          import java.io.File;
+          import java.util.concurrent.ThreadLocalRandom;
+
+          public final class XposedInit implements IXposedHookLoadPackage {
+              private static final String TARGET_PKG = "com.logistics.rider.hungerstation";
+
+              @Override
+              public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+                  if (lpparam == null || !TARGET_PKG.equals(lpparam.packageName)) {
+                      return;
+                  }
+                  final ClassLoader cl = lpparam.classLoader;
+
+                  // 1. Pre-initialize coherent device profile immediately before any class loads
+                  try {
+                      int idx = ThreadLocalRandom.current().nextInt(h2.a.f1907a.length);
+                      b.sBrand = h2.a.f1907a[idx];
+                      b.sManufacturer = h2.a.f1908b[idx];
+                      b.sModel = h2.a.f1909c[idx];
+                      b.sDevice = h2.a.d[idx];
+                      b.sBoard = h2.a.f1910e[idx];
+                      b.sProduct = h2.a.f1911f[idx];
+                      b.sBootloader = h2.a.f1912g[idx];
+                      b.sFingerprint = h2.a.h[idx];
+                      b.sAndroidId = b.generateRandomHex(16);
+                      b.loadFromXSharedPrefs();
+                      b.applyBuildSpoof(cl);
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: Pre-init spoof error: " + t.getMessage());
+                  }
+
+                  // 2. Hook Application.attach(Context) and Application.onCreate() to load saved profile early
+                  try {
+                      XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new b(1, cl));
+                      XposedHelpers.findAndHookMethod(Application.class, "onCreate", new b(1, cl));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: Application hook error: " + t.getMessage());
+                  }
+
+                  // 3. Hook Google Play Store installer verification & hide root/module packages
+                  try {
+                      Class<?> pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", cl);
+                      XposedHelpers.findAndHookMethod(pmClass, "getInstallerPackageName", String.class, new b(0, TARGET_PKG));
+                      XposedHelpers.findAndHookMethod(pmClass, "getPackageInfo", String.class, int.class, new b(6, null));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: PackageManager hook error: " + t.getMessage());
+                  }
+
+                  try {
+                      Class<?> isiClass = cl.loadClass("android.content.pm.InstallSourceInfo");
+                      XposedHelpers.findAndHookMethod(isiClass, "getInstallingPackageName", new a(1));
+                      XposedHelpers.findAndHookMethod(isiClass, "getInitiatingPackageName", new a(1));
+                      XposedHelpers.findAndHookMethod(isiClass, "getOriginatingPackageName", new a(1));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: InstallSourceInfo hook error: " + t.getMessage());
+                  }
+
+                  // 4. Hook SystemProperties.get for native/reflection device property checks
+                  try {
+                      Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", cl);
+                      XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, new b(4, null));
+                      XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, new b(4, null));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: SystemProperties hook error: " + t.getMessage());
+                  }
+
+                  // 5. Hook ANDROID_ID & Developer Options / ADB / Mock Location flags
+                  try {
+                      XposedHelpers.findAndHookMethod(Settings.Secure.class, "getString", ContentResolver.class, String.class, new b(2, null));
+                      XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
+                      XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, new b(3, null));
+                      XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
+                      XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, new b(3, null));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: Settings hook error: " + t.getMessage());
+                  }
+
+                  // 6. Hook Mock Location detection on Location objects
+                  try {
+                      XposedHelpers.findAndHookMethod(Location.class, "isFromMockProvider", new a(2));
+                      if (Build.VERSION.SDK_INT >= 31) {
+                          XposedHelpers.findAndHookMethod(Location.class, "isMock", new a(2));
+                      }
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: Location hook error: " + t.getMessage());
+                  }
+
+                  // 7. Hook Root / Xposed file existence checks
+                  try {
+                      XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
+                  } catch (Throwable t) {
+                      XposedBridge.log("HS-Rider: File.exists hook error: " + t.getMessage());
+                  }
+
+                  // 8. Safely hook legacy o.ewG.serializer if present in target version (without crashing if renamed)
+                  try {
+                      Class<?> legacyClass = XposedHelpers.findClassIfExists("o.ewG", cl);
+                      if (legacyClass != null) {
+                          XposedHelpers.findAndHookMethod(legacyClass, "serializer", new a(0));
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+          }
+          EOF
+
+          # Write upgraded MainActivity.java synced with LSPosed XSharedPreferences
+          cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/MainActivity.java
+          package com.logistics.rider.lsposed;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.os.Bundle;
+          import android.widget.Button;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          import androidx.appcompat.app.AppCompatActivity;
+          import i2.b;
+          import java.util.concurrent.ThreadLocalRandom;
+
+          public final class MainActivity extends AppCompatActivity {
+              private TextView tvProfileInfo;
+
+              @SuppressWarnings("deprecation")
+              private SharedPreferences getModulePrefs() {
+                  try {
+                      return getSharedPreferences("com.logistics.rider.settings", Context.MODE_WORLD_READABLE);
+                  } catch (SecurityException e) {
+                      return getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
+                  }
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+
+                  tvProfileInfo = findViewById(R.id.tv_profile_info);
+                  Button btnRandomize = findViewById(R.id.btn_randomize);
+
+                  SharedPreferences prefs = getModulePrefs();
+                  if (!prefs.contains("model")) {
+                      randomizeProfile(prefs);
+                  }
+                  updateUi(prefs);
+
+                  btnRandomize.setOnClickListener(v -> {
+                      randomizeProfile(prefs);
+                      updateUi(prefs);
+                      Toast.makeText(this, "تم تحديث هوية الجهاز و Android ID بنجاح! أعد تشغيل تطبيق المندوب لتطبيقها.", Toast.LENGTH_LONG).show();
+                  });
+              }
+
+              private void randomizeProfile(SharedPreferences prefs) {
+                  int idx = ThreadLocalRandom.current().nextInt(h2.a.f1907a.length);
+                  prefs.edit()
+                      .putString("brand", h2.a.f1907a[idx])
+                      .putString("manufacturer", h2.a.f1908b[idx])
+                      .putString("model", h2.a.f1909c[idx])
+                      .putString("device", h2.a.d[idx])
+                      .putString("board", h2.a.f1910e[idx])
+                      .putString("product", h2.a.f1911f[idx])
+                      .putString("bootloader", h2.a.f1912g[idx])
+                      .putString("fingerprint", h2.a.h[idx])
+                      .putString("android_id", b.generateRandomHex(16))
+                      .putBoolean("spoof_device", true)
+                      .putBoolean("spoof_device_v2", true)
+                      .apply();
+              }
+
+              private void updateUi(SharedPreferences prefs) {
+                  String info = "الحالة: نشط (HS Rider v2.0 Modern)
+"
+                      + "التطبيق المستهدف: com.logistics.rider.hungerstation
+
+"
+                      + "الحمايات المفعلة تلقائياً:
+"
+                      + "• تزييف متطابق لهوية الجهاز (Build + SystemProperties)
+"
+                      + "• تزييف معرف الجهاز (ANDROID_ID)
+"
+                      + "• تزييف مصدر التثبيت (Google Play Store)
+"
+                      + "• إخفاء خيارات المطور و USB Debugging
+"
+                      + "• إخفاء الموقع الوهمي (Mock Location) والروت وإخفاء الإضافة
+
+"
+                      + "الهوية الحالية المرسلة للتطبيق:
+"
+                      + "الشركة: " + prefs.getString("brand", "") + " (" + prefs.getString("manufacturer", "") + ")
+"
+                      + "الموديل: " + prefs.getString("model", "") + " [" + prefs.getString("device", "") + "]
+"
+                      + "Android ID: " + prefs.getString("android_id", "") + "
+"
+                      + "البصمة:
+" + prefs.getString("fingerprint", "");
+                  tvProfileInfo.setText(info);
+              }
+          }
+          EOF
+
+          # 3. Clean decompiled library resources & keep only app resources
+          mkdir -p /tmp/res_backup/drawable /tmp/res_backup/xml
+          cp -r app/src/main/res/mipmap-* /tmp/res_backup/
+          cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/res_backup/drawable/
+          cp app/src/main/res/xml/backup_rules.xml /tmp/res_backup/xml/
+          cp app/src/main/res/xml/data_extraction_rules.xml /tmp/res_backup/xml/
+
+          rm -rf app/src/main/res/*
+          cp -r /tmp/res_backup/* app/src/main/res/
+          mkdir -p app/src/main/res/values app/src/main/res/layout
+
+          # Write modern interactive activity_main.xml
+          cat << 'EOF' > app/src/main/res/layout/activity_main.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/main"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="24dp"
+              android:gravity="center_horizontal">
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="HS Rider Killer v2.0"
+                  android:textSize="22sp"
+                  android:textStyle="bold"
+                  android:layout_marginTop="16dp"
+                  android:layout_marginBottom="16dp" />
+
+              <TextView
+                  android:id="@+id/tv_profile_info"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:textSize="14sp"
+                  android:lineSpacingExtra="4dp"
+                  android:padding="16dp" />
+
+              <Button
+                  android:id="@+id/btn_randomize"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="توليد هوية جهاز جديدة"
+                  android:layout_marginTop="16dp" />
+
+          </LinearLayout>
+          EOF
+
+          # Restore valid AAPT inline gradient in ic_launcher_foreground.xml
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:aapt="http://schemas.android.com/aapt"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
+                  <aapt:attr name="android:fillColor">
+                      <gradient
+                          android:endX="85.8476"
+                          android:endY="92.4963"
+                          android:startX="42.9492"
+                          android:startY="49.5979"
+                          android:type="linear">
+                          <item
+                              android:color="#44000000"
+                              android:offset="0.0" />
+                          <item
+                              android:color="#00000000"
+                              android:offset="1.0" />
+                      </gradient>
+                  </aapt:attr>
+              </path>
+              <path
+                  android:fillColor="#ffffff"
+                  android:fillType="nonZero"
+                  android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
+                  android:strokeColor="#00000000"
+                  android:strokeWidth="1" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">HS Rider v2.0</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="black">#FF000000</color>
+              <color name="white">#FFFFFFFF</color>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Base.Theme.HSRider" parent="Theme.Material3.DayNight.NoActionBar" />
+              <style name="Theme.HSRider" parent="Base.Theme.HSRider" />
+          </resources>
+          EOF
+
+          # 4. Write updated AndroidManifest.xml with MainActivity registered for Launcher & LSPosed Settings
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.logistics.rider.lsposed">
+
+              <application
+                  android:allowBackup="true"
+                  android:dataExtractionRules="@xml/data_extraction_rules"
+                  android:extractNativeLibs="false"
+                  android:fullBackupContent="@xml/backup_rules"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.HSRider">
+
+                  <meta-data
+                      android:name="xposedmodule"
+                      android:value="true" />
+                  <meta-data
+                      android:name="xposedminversion"
+                      android:value="93" />
+                  <meta-data
+                      android:name="xposeddescription"
+                      android:value="HS Rider Killer v2.0 (Modern Device &amp; Integrity Spoofer)" />
+                  <meta-data
+                      android:name="xposedscope"
+                      android:value="com.logistics.rider.hungerstation" />
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+                      </intent-filter>
+                  </activity>
+
+              </application>
+          </manifest>
+          EOF
+
+          # 5. Update Gradle configuration files for modern Android build
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url 'https://api.xposed.info/' }
+              }
+          }
+          rootProject.name = "HS Rider"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.logistics.rider.lsposed'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.logistics.rider.lsposed"
+                  minSdk 30
+                  targetSdk 34
+                  versionCode 2
+                  versionName "2.0"
+              }
+
+              signingConfigs {
+                  debug {
+                      // Uses standard Android debug keystore automatically generated in CI
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      signingConfig signingConfigs.debug
+                  }
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              compileOnly 'de.robv.android.xposed:api:82'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+          }
+          EOF
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Build Signed APK
+        run: |
+          gradle assembleRelease --stacktrace
+          mkdir -p output
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.0.apk
+          ls -lh output/
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HS-Rider-v2.0-APK
+          path: output/HS-Rider-v2.0.apk
+          if-no-files-found: error
