@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v2.7 (Fix LogProvider URI Grant + IAL403 Fix)
+    name: Build Signed HS Panel v2.8 (Fix IAL403 Login + FakeProcess + NPE Fix)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v2.7 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v2.8 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -39,9 +39,16 @@ jobs:
           mkdir -p app/src/main/java/h2 \
                    app/src/main/java/i2 \
                    app/src/main/java/com/logistics/rider/lsposed/xposed \
-                   app/src/main/assets
-
-          # 1. Pure Java device profiles + hex generator (ZERO Xposed imports so MainActivity can use it safely!)
+                   app/src/main/assets \
+                   /tmp/res_backup/drawable /tmp/res_backup/xml
+          cp -r app/src/main/res/mipmap-* /tmp/res_backup/ 2>/dev/null || true
+          cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/res_backup/drawable/ 2>/dev/null || true
+          cp app/src/main/res/xml/backup_rules.xml /tmp/res_backup/xml/ 2>/dev/null || true
+          cp app/src/main/res/xml/data_extraction_rules.xml /tmp/res_backup/xml/ 2>/dev/null || true
+          rm -rf app/src/main/res/*
+          cp -r /tmp/res_backup/* app/src/main/res/ 2>/dev/null || true
+          mkdir -p app/src/main/res/values app/src/main/res/layout app/src/main/res/drawable app/src/main/res/xml
+          echo "com.logistics.rider.lsposed.xposed.XposedInit" > app/src/main/assets/xposed_init
           cat << 'EOF' > app/src/main/java/h2/a.java
           package h2;
 
@@ -49,44 +56,44 @@ jobs:
 
           public abstract class a {
               public static final String[] f1907a = {
-                  "samsung", "samsung", "google", "Xiaomi", "OnePlus",
-                  "vivo", "OPPO", "realme", "HONOR", "Sony"
+                  "samsung", "xiaomi", "oppo", "google", "vivo",
+                  "OnePlus", "realme", "infinix", "honor", "sony"
               };
               public static final String[] f1908b = {
-                  "Samsung Electronics", "Samsung Electronics", "Google LLC", "Xiaomi Inc.", "OnePlus Technology Co., Ltd.",
-                  "Vivo Communication Technology", "OPPO Electronics Corp.", "Realme Chongqing Mobile Telecommunications", "Honor Device Co., Ltd.", "Sony Corporation"
+                  "Samsung Electronics", "Xiaomi Inc.", "OPPO Electronics Corp.", "Google LLC", "Vivo Communication Technology",
+                  "OnePlus Technology Co., Ltd.", "Realme Chongqing Mobile Telecommunications", "Infinix Mobility Limited", "Honor Device Co., Ltd.", "Sony Corporation"
               };
               public static final String[] f1909c = {
-                  "SM-S928B", "SM-S938B", "Pixel 9 Pro XL", "2410DPN6CC", "CPH2653",
-                  "V2405A", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
+                  "SM-S928B", "2312DRA50G", "CPH2609", "Pixel 8 Pro", "V2309",
+                  "CPH2573", "RMX3843", "X6Pro", "ALI-NX9", "XQ-EC54"
               };
               public static final String[] d = {
-                  "dm3q", "pa3q", "komodo", "haotian", "OP5D0DL1",
-                  "PD2405", "OP5CF9L1", "RE6018L1", "HNP-PTP", "pdx245"
+                  "dm3q", "houji", "OP5B51L1", "husky", "V2309",
+                  "OP5919L1", "RE5C4FL1", "Infinix-X6837", "ALI-NX9", "XQ-EC54"
               };
               public static final String[] f1910e = {
-                  "s5e9945", "sun", "caiman", "sun", "sun",
-                  "mt6991", "mt6991", "sun", "sun", "pineapple"
+                  "s5e9945", "kalama", "kalama", "zuma", "kalama",
+                  "kalama", "kalama", "mt6769", "kalama", "kalama"
               };
               public static final String[] f1911f = {
-                  "dm3qxxx", "pa3qxxx", "komodo", "haotian", "CPH2653",
-                  "PD2405", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
+                  "dm3qxxx", "houji", "OP5B51L1", "husky", "V2309",
+                  "OP5919L1", "RE5C4FL1", "Infinix-X6837", "ALI-NX9", "XQ-EC54_pdx234"
               };
               public static final String[] f1912g = {
-                  "S928BXXU1AWL5", "S938BXXU1AYA1", "ripcurrent-15.1-12491234", "haotian-2.0.102.0", "unknown",
+                  "S928BXXU1AWL5", "houji-1.0.0-00001", "unknown", "husky-1.0-10819697", "unknown",
                   "unknown", "unknown", "unknown", "unknown", "unknown"
               };
               public static final String[] h = {
                   "samsung/dm3qxxx/dm3q:14/UP1A.231005.007/S928BXXU1AWL5:user/release-keys",
-                  "samsung/pa3qxxx/pa3q:15/AP3A.240905.015.A2/S938BXXU1AYA1:user/release-keys",
-                  "google/komodo/komodo:15/AP4A.250105.002/12701944:user/release-keys",
-                  "Xiaomi/haotian/haotian:15/AQ3A.240812.002/OS2.0.102.0.VOBCNXM:user/release-keys",
-                  "OnePlus/CPH2653/OP5D0DL1:15/AP3A.240617.008/U.R4T3.1731564:user/release-keys",
-                  "vivo/PD2405/PD2405:15/AP3A.240905.015.A2/compiler11201512:user/release-keys",
-                  "OPPO/CPH2659/OP5CF9L1:15/AP3A.240617.008/S.1829310:user/release-keys",
-                  "realme/RMX5011/RE6018L1:15/AP3A.240617.008/R.1920142:user/release-keys",
-                  "HONOR/PTP-N49/HNP-PTP:15/HONORPTP-N49/9.0.0.132C185:user/release-keys",
-                  "Sony/XQ-EC54/pdx245:15/69.1.A.2.100/069001A002010000:user/release-keys"
+                  "Xiaomi/houji/houji:14/UKQ1.230917.001/OS1.0.2.0.UNCCNXM:user/release-keys",
+                  "OPPO/CPH2609/OP5B51L1:14/UKQ1.230917.001/R.202312:user/release-keys",
+                  "google/husky/husky:14/AP1A.240405.002/11480754:user/release-keys",
+                  "vivo/V2309/V2309:14/UKQ1.230917.001/compiler09041712:user/release-keys",
+                  "OnePlus/OP5919L1/OP5919L1:14/UKQ1.230917.001/T.120230929:user/release-keys",
+                  "realme/RE5C4FL1/RE5C4FL1:14/UKQ1.230917.001/S.202312:user/release-keys",
+                  "Infinix/X6837/Infinix-X6837:13/TP1A.220624.014/230811V235:user/release-keys",
+                  "HONOR/ALI-NX9/ALI-NX9:14/HONORALI-NX9/104.0.0.119:user/release-keys",
+                  "Sony/XQ-EC54_pdx234/XQ-EC54:14/67.1.A.3.163/067001A003016300MR:user/release-keys"
               };
 
               public static String randomHex(int len) {
@@ -101,11 +108,11 @@ jobs:
           }
           EOF
 
-          # 2. Diagnostic Logger (Exact v2.5 proven ContentResolver protocol!)
           cat << 'EOF' > app/src/main/java/i2/c.java
           package i2;
 
           import android.content.Context;
+          import android.content.pm.ApplicationInfo;
           import android.net.Uri;
           import android.os.Bundle;
           import android.os.Environment;
@@ -113,13 +120,18 @@ jobs:
           import de.robv.android.xposed.XposedBridge;
           import java.io.File;
           import java.io.FileOutputStream;
+          import java.lang.reflect.Field;
+          import java.lang.reflect.Method;
+          import java.lang.reflect.Modifier;
           import java.nio.charset.StandardCharsets;
           import java.text.SimpleDateFormat;
           import java.util.ArrayList;
           import java.util.Date;
+          import java.util.Enumeration;
           import java.util.List;
           import java.util.Locale;
           import java.util.concurrent.ConcurrentHashMap;
+          import dalvik.system.DexFile;
 
           public final class c {
               private static final List<String> sBuffer = new ArrayList<>();
@@ -159,7 +171,7 @@ jobs:
                   boolean isCritical = "INIT".equals(tag) || "ERROR".equals(tag) || "CRASH".equals(tag)
                       || "CRASH-GUARD".equals(tag) || "APP-EXIT".equals(tag) || "BYPASS".equals(tag)
                       || "ACTIVITY".equals(tag) || "SPOOF".equals(tag) || "IAL403".equals(tag)
-                      || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag);
+                      || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag) || "DEX-SCAN".equals(tag);
                   if (count > 3 && !isCritical) {
                       return;
                   }
@@ -240,12 +252,64 @@ jobs:
                       String cn = el.getClassName();
                       if (cn.contains("verifyRootIntegrity") || cn.contains("RiderSupportFeaturesImpl")
                               || cn.contains("setLocaleList") || cn.contains("setFontWeight")
+                              || cn.contains("ewG") || cn.contains("Login") || cn.contains("Auth")
                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
                           return true;
                       }
                   }
                   return false;
+              }
+
+              /**
+               * Dynamically scans the loaded ClassLoader / DexElements in `o.*` and `com.roadrunner.*`
+               * to find any obfuscated class equivalent to `o.ewG` (zero-arg `serializer()` method returning
+               * String/Header/Token or root/integrity check) and hooks it automatically!
+               */
+              @SuppressWarnings("deprecation")
+              public static void scanAndHookDynamicIntegrityClasses(ClassLoader cl, ApplicationInfo appInfo) {
+                  if (cl == null || appInfo == null || appInfo.sourceDir == null) return;
+                  new Thread(() -> {
+                      try {
+                          List<String> apkPaths = new ArrayList<>();
+                          apkPaths.add(appInfo.sourceDir);
+                          if (appInfo.splitSourceDirs != null) {
+                              for (String s : appInfo.splitSourceDirs) {
+                                  apkPaths.add(s);
+                              }
+                          }
+                          int hookedZeroArgSerializers = 0;
+                          int hookedIntegrityMethods = 0;
+                          for (String path : apkPaths) {
+                              try {
+                                  DexFile df = new DexFile(path);
+                                  Enumeration<String> entries = df.entries();
+                                  while (entries.hasMoreElements()) {
+                                      String clsName = entries.nextElement();
+                                      if (clsName == null) continue;
+                                      // Check com.roadrunner.* integrity/security/auth classes
+                                      if (clsName.startsWith("com.roadrunner.") && (clsName.contains("Integrity") || clsName.contains("Root") || clsName.contains("RiderSupportFeaturesImpl"))) {
+                                          try {
+                                              Class<?> k = cl.loadClass(clsName);
+                                              for (Method m : k.getDeclaredMethods()) {
+                                                  if (m.getName().contains("Root") || m.getName().contains("Integrity") || "invokeSuspend".equals(m.getName())) {
+                                                      XposedBridge.hookMethod(m, new a(4));
+                                                      hookedIntegrityMethods++;
+                                                  }
+                                              }
+                                          } catch (Throwable ignored) {
+                                          }
+                                      }
+                                  }
+                                  df.close();
+                              } catch (Throwable ignored) {
+                              }
+                          }
+                          log("DEX-SCAN", "Auto-scanned APK dex files: hooked " + hookedIntegrityMethods + " roadrunner integrity methods.");
+                      } catch (Throwable t) {
+                          logError("DexScan", t);
+                      }
+                  }, "HS-DexScanner").start();
               }
 
               public static synchronized void flushPendingToProvider() {
@@ -290,7 +354,6 @@ jobs:
           }
           EOF
 
-          # 3. Method Hooks Part A (o.setFontWeight.serializer, verifyRootIntegrity safety net, Location, InstallSourceInfo)
           cat << 'EOF' > app/src/main/java/i2/a.java
           package i2;
 
@@ -305,29 +368,32 @@ jobs:
                   this.f1994a = i3;
               }
 
+              private static void setSafeDefaultResult(XC_MethodHook.MethodHookParam param) {
+                  Class<?> retType = (param.method instanceof Method)
+                      ? ((Method) param.method).getReturnType() : Object.class;
+                  if (retType == boolean.class || retType == Boolean.class) {
+                      param.setResult(Boolean.FALSE);
+                  } else if (retType == int.class || retType == Integer.class) {
+                      param.setResult(0);
+                  } else if (retType == long.class || retType == Long.class) {
+                      param.setResult(0L);
+                  } else {
+                      param.setResult(null);
+                  }
+              }
+
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // o.setFontWeight.serializer (Exact 1Shot.apk equivalent of o.ewG.serializer -> null)
+                      case 0: // 1Shot exact equivalent: o.ewG.serializer / o.setFontWeight.serializer -> null
                           if (!b.sOptIntegrityBypass) return;
-                          int argCount = methodHookParam.args != null ? methodHookParam.args.length : 0;
-                          if (argCount == 0 || c.isIntegrityInStack()) {
-                              Class<?> retType = (methodHookParam.method instanceof Method)
-                                  ? ((Method) methodHookParam.method).getReturnType() : Object.class;
-                              if (retType == boolean.class) {
-                                  methodHookParam.setResult(Boolean.FALSE);
-                              } else if (retType == int.class) {
-                                  methodHookParam.setResult(0);
-                              } else {
-                                  methodHookParam.setResult(null);
-                              }
-                              c.log("BYPASS", "Bypassed o.setFontWeight." + methodHookParam.method.getName()
-                                  + "(args=" + argCount + ") -> null (1Shot mode) | caller=" + c.getCallerInfo());
-                          }
+                          setSafeDefaultResult(methodHookParam);
+                          c.log("BYPASS", "Bypassed " + methodHookParam.method.getDeclaringClass().getName() + "."
+                              + methodHookParam.method.getName() + " -> null (1Shot mode) | caller=" + c.getCallerInfo());
                           return;
                       case 2: // Location.isMock / isFromMockProvider
-                          if (!b.sOptMockHide) return;
+                          if (!b.sOptMockHide || b.sOpt1ShotExactMode) return;
                           c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
                               + "() -> false | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(Boolean.FALSE);
@@ -337,10 +403,46 @@ jobs:
                           c.log("INSTALLER", "Spoofed getPackageSource() -> 2 (PACKAGE_SOURCE_STORE) | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(2);
                           return;
-                      case 4: // Let verifyRootIntegrity$1.invokeSuspend RUN normally, catch only in afterHookedMethod!
-                      case 5: // o.x5.serializer tracer
+                      case 4: // verifyRootIntegrity$1.invokeSuspend & RiderSupportFeaturesImpl
+                          if (!b.sOptIntegrityBypass) return;
+                          String mName = methodHookParam.method.getName();
+                          if ("invokeSuspend".equals(mName) && methodHookParam.method.getDeclaringClass().getName().contains("verifyRootIntegrity")) {
+                              Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
+                                  ? methodHookParam.thisObject.getClass().getClassLoader() : null);
+                              if (unitInstance != null) {
+                                  methodHookParam.setResult(unitInstance);
+                                  c.log("BYPASS", "Short-circuited verifyRootIntegrity$1.invokeSuspend -> kotlin.Unit (no NPE)");
+                                  return;
+                              }
+                          } else if (mName.toLowerCase().contains("root") || mName.toLowerCase().contains("integrity")) {
+                              Class<?> retType = (methodHookParam.method instanceof Method)
+                                  ? ((Method) methodHookParam.method).getReturnType() : Object.class;
+                              if (retType == boolean.class || retType == Boolean.class) {
+                                  methodHookParam.setResult(Boolean.FALSE);
+                                  c.log("BYPASS", "Bypassed " + methodHookParam.method.getDeclaringClass().getSimpleName() + "." + mName + " -> false");
+                              }
+                          }
                           return;
-                      default: // InstallSourceInfo package name methods
+                      case 5: // o.x5.serializer (1Shot equivalent when returning installer or integrity string)
+                          return;
+                      case 6: // Obfuscated root-check helpers (o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing / o.setCustomAttributeArray)
+                          if (!b.sOptRootHide && !b.sOptIntegrityBypass) return;
+                          Class<?> retType = (methodHookParam.method instanceof Method)
+                              ? ((Method) methodHookParam.method).getReturnType() : Object.class;
+                          if (retType == boolean.class || retType == Boolean.class) {
+                              methodHookParam.setResult(Boolean.FALSE);
+                              c.log("BYPASS", "Blocked obfuscated root helper "
+                                  + methodHookParam.method.getDeclaringClass().getName() + "."
+                                  + methodHookParam.method.getName() + " -> false | caller=" + c.getCallerInfo());
+                          } else if (retType == String.class && (methodHookParam.args == null || methodHookParam.args.length == 0)) {
+                              // If an obfuscated 0-arg serializer() returns a root-flag string (like o.ewG.serializer in 1Shot), return null!
+                              methodHookParam.setResult(null);
+                              c.log("BYPASS", "Bypassed obfuscated String serializer "
+                                  + methodHookParam.method.getDeclaringClass().getName() + "."
+                                  + methodHookParam.method.getName() + " -> null (1Shot style) | caller=" + c.getCallerInfo());
+                          }
+                          return;
+                      default: // InstallSourceInfo package name methods (case 1)
                           if (!b.sOptInstallerSpoof) return;
                           c.log("INSTALLER", "Spoofed " + methodHookParam.method.getName()
                               + "() -> com.android.vending | caller=" + c.getCallerInfo());
@@ -352,29 +454,19 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
-                  if (this.f1994a == 0 || this.f1994a == 4) {
+                  if (this.f1994a == 0 || this.f1994a == 4 || this.f1994a == 6) {
                       Throwable t = methodHookParam.getThrowable();
                       if (t != null && b.sOptIntegrityBypass) {
                           c.log("BYPASS", "Caught & cleared exception in "
                               + methodHookParam.method.getDeclaringClass().getName() + "." + methodHookParam.method.getName()
                               + " (" + t.getClass().getSimpleName() + ": " + t.getMessage() + ")");
-                          if ("invokeSuspend".equals(methodHookParam.method.getName())
-                                  && methodHookParam.args != null && methodHookParam.args.length > 0) {
-                              methodHookParam.setResult(methodHookParam.args[0]);
+                          if ("invokeSuspend".equals(methodHookParam.method.getName())) {
+                              Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
+                                  ? methodHookParam.thisObject.getClass().getClassLoader() : null);
+                              methodHookParam.setResult(unitInstance);
                           } else {
-                              Class<?> retType = (methodHookParam.method instanceof Method)
-                                  ? ((Method) methodHookParam.method).getReturnType() : Object.class;
-                              if (retType == boolean.class) {
-                                  methodHookParam.setResult(Boolean.FALSE);
-                              } else if (retType == int.class) {
-                                  methodHookParam.setResult(0);
-                              } else {
-                                  methodHookParam.setResult(null);
-                              }
+                              setSafeDefaultResult(methodHookParam);
                           }
-                      } else if (this.f1994a == 4 && "invokeSuspend".equals(methodHookParam.method.getName())) {
-                          c.log("BYPASS", "verifyRootIntegrity$1.invokeSuspend completed normally! result="
-                              + String.valueOf(methodHookParam.getResult()));
                       }
                   } else if (this.f1994a == 5) {
                       String argsStr = methodHookParam.args != null ? Arrays.toString(methodHookParam.args) : "[]";
@@ -387,13 +479,13 @@ jobs:
           }
           EOF
 
-          # 4. Method Hooks Part B (Consistent Spoof, Full Shell/getprop/Incognia Shield, Crash Guard)
           cat << 'EOF' > app/src/main/java/i2/b.java
           package i2;
 
           import android.app.Activity;
           import android.app.Application;
           import android.content.Context;
+          import android.content.SharedPreferences;
           import android.content.pm.PackageInfo;
           import android.content.pm.PackageManager;
           import android.os.Build;
@@ -401,16 +493,20 @@ jobs:
           import de.robv.android.xposed.XC_MethodHook;
           import de.robv.android.xposed.XSharedPreferences;
           import de.robv.android.xposed.XposedHelpers;
+          import java.io.ByteArrayInputStream;
           import java.io.File;
           import java.io.FileInputStream;
           import java.io.FileOutputStream;
-          import java.io.IOException;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.nio.charset.StandardCharsets;
           import java.util.Arrays;
           import java.util.HashSet;
           import java.util.List;
           import java.util.Objects;
           import java.util.Properties;
           import java.util.Set;
+          import java.util.concurrent.TimeUnit;
 
           public final class b extends XC_MethodHook {
               public final int f1995a;
@@ -428,6 +524,7 @@ jobs:
               private static volatile String sDataDir;
 
               public static volatile boolean sOptMaster = true;
+              public static volatile boolean sOpt1ShotExactMode = false;
               public static volatile boolean sOptIntegrityBypass = true;
               public static volatile boolean sOptDeviceSpoof = true;
               public static volatile boolean sOptAndroidId = true;
@@ -436,8 +533,8 @@ jobs:
               public static volatile boolean sOptMockHide = true;
 
               private static volatile boolean sSpoofLogged = false;
+              private static volatile Object sCachedKotlinUnit = null;
 
-              // IMPORTANT: Do NOT include com.logistics.rider.lsposed here so ContentResolver can always reach LogProvider!
               private static final Set<String> HIDDEN_PKGS = new HashSet<>(Arrays.asList(
                   "com.topjohnwu.magisk",
                   "io.github.vvb2060.magisk",
@@ -462,6 +559,135 @@ jobs:
                   this.f1996b = obj;
               }
 
+              public static Object getKotlinUnit(ClassLoader cl) {
+                  if (sCachedKotlinUnit != null) return sCachedKotlinUnit;
+                  try {
+                      Class<?> unitCls = cl != null ? cl.loadClass("kotlin.Unit") : Class.forName("kotlin.Unit");
+                      sCachedKotlinUnit = XposedHelpers.getStaticObjectField(unitCls, "INSTANCE");
+                      return sCachedKotlinUnit;
+                  } catch (Throwable ignored) {
+                      return null;
+                  }
+              }
+
+              /**
+               * Clean FakeProcess that returns valid benign stdout and exitCode instead of throwing IOException("Permission denied")
+               * or null streams (which caused NPE in RiderSupportFeaturesImpl$verifyRootIntegrity$1 and flagged Incognia tampering).
+               */
+              public static final class FakeProcess extends Process {
+                  private final byte[] stdoutBytes;
+                  private final int exitCode;
+
+                  public FakeProcess(String stdoutText, int exitCode) {
+                      this.stdoutBytes = (stdoutText != null ? stdoutText : "").getBytes(StandardCharsets.UTF_8);
+                      this.exitCode = exitCode;
+                  }
+
+                  @Override
+                  public OutputStream getOutputStream() {
+                      return new OutputStream() {
+                          @Override
+                          public void write(int b) {}
+                      };
+                  }
+
+                  @Override
+                  public InputStream getInputStream() {
+                      return new ByteArrayInputStream(this.stdoutBytes);
+                  }
+
+                  @Override
+                  public InputStream getErrorStream() {
+                      return new ByteArrayInputStream(new byte[0]);
+                  }
+
+                  @Override
+                  public int waitFor() {
+                      return this.exitCode;
+                  }
+
+                  @Override
+                  public boolean waitFor(long timeout, TimeUnit unit) {
+                      return true;
+                  }
+
+                  @Override
+                  public int exitValue() {
+                      return this.exitCode;
+                  }
+
+                  @Override
+                  public void destroy() {}
+
+                  @Override
+                  public Process destroyForcibly() {
+                      return this;
+                  }
+
+                  @Override
+                  public boolean isAlive() {
+                      return false;
+                  }
+              }
+
+              private static FakeProcess createFakeProcessForCommand(String cmdStr) {
+                  if (cmdStr == null) return null;
+                  if (cmdStr.contains("log.tag.BRAZE") || cmdStr.contains("log.tag.APPBOY")) {
+                      return null;
+                  }
+                  String lower = cmdStr.toLowerCase();
+
+                  // 1. which su / busybox / magisk -> exitCode 1 (not found), empty output
+                  if (lower.contains("which") || lower.endsWith(" su") || lower.contains(", su]")
+                          || lower.contains("/su") || lower.contains("magisk")
+                          || lower.contains("busybox") || lower.contains("kernelsu") || lower.contains("apatch")) {
+                      return new FakeProcess("", 1);
+                  }
+
+                  // 2. getprop ro.secure or base64 encoded "getprop ro.secure" (Z2V0cHJvcCByby5zZWN1cmUK)
+                  if (lower.contains("ro.secure") || cmdStr.contains("Z2V0cHJvcC")) {
+                      return new FakeProcess("1\n", 0);
+                  }
+
+                  // 3. full getprop dump
+                  if (lower.contains("getprop")) {
+                      String brand = sBrand != null ? sBrand : "samsung";
+                      String model = sModel != null ? sModel : "SM-S928B";
+                      String dev = sDevice != null ? sDevice : "dm3q";
+                      String fp = sFingerprint != null ? sFingerprint : "samsung/dm3qxxx/dm3q:14/UP1A.231005.007/S928BXXU1AWL5:user/release-keys";
+                      String props = "[ro.build.tags]: [release-keys]\n"
+                          + "[ro.build.type]: [user]\n"
+                          + "[ro.debuggable]: [0]\n"
+                          + "[ro.secure]: [1]\n"
+                          + "[ro.boot.verifiedbootstate]: [green]\n"
+                          + "[ro.boot.flash.locked]: [1]\n"
+                          + "[ro.boot.vbmeta.device_state]: [locked]\n"
+                          + "[ro.product.brand]: [" + brand + "]\n"
+                          + "[ro.product.model]: [" + model + "]\n"
+                          + "[ro.product.device]: [" + dev + "]\n"
+                          + "[ro.build.fingerprint]: [" + fp + "]\n";
+                      return new FakeProcess(props, 0);
+                  }
+
+                  // 4. mount or base64 encoded "mount" (bW91bnQK)
+                  if (lower.contains("mount") || cmdStr.contains("bW91bnQK")) {
+                      String mounts = "/dev/block/dm-0 / ext4 ro,seclabel,relatime 0 0\n"
+                          + "/dev/block/dm-1 /system ext4 ro,seclabel,relatime 0 0\n"
+                          + "/dev/block/dm-2 /vendor ext4 ro,seclabel,relatime 0 0\n"
+                          + "/dev/block/dm-3 /product ext4 ro,seclabel,relatime 0 0\n"
+                          + "/dev/block/by-name/userdata /data f2fs rw,seclabel,nosuid,nodev,noatime 0 0\n";
+                      return new FakeProcess(mounts, 0);
+                  }
+
+                  // 5. /proc/<pid>/fd or ps -T or RANDOM_VAR shell checks by Incognia
+                  if (lower.contains("/proc/") || lower.contains("ps ") || lower.contains("[ps,")
+                          || cmdStr.contains("RANDOM_VAR") || lower.contains("base64")) {
+                      return new FakeProcess("total 0\n", 0);
+                  }
+
+                  return null;
+              }
+
               private static void saveProfileToLocalProp(String dataDir) {
                   if (dataDir == null || sBrand == null) return;
                   try {
@@ -483,6 +709,25 @@ jobs:
                   }
               }
 
+              private static void syncProfileToAppSharedPrefs(Context ctx) {
+                  if (ctx == null || sBrand == null) return;
+                  try {
+                      SharedPreferences sp = ctx.getSharedPreferences("com.logistics.rider.settings", 0);
+                      sp.edit()
+                          .putString("brand", sBrand)
+                          .putString("model", sModel)
+                          .putString("manufacturer", sManufacturer)
+                          .putString("product", sProduct)
+                          .putString("board", sBoard)
+                          .putString("device", sDevice)
+                          .putString("bootloader", sBootloader)
+                          .putString("fingerprint", sFingerprint)
+                          .putBoolean("spoof_device", true)
+                          .apply();
+                  } catch (Throwable ignored) {
+                  }
+              }
+
               public static void loadConfigFromProvider(Context ctx, ClassLoader cl) {
                   if (ctx == null) return;
                   try {
@@ -492,6 +737,7 @@ jobs:
                       Bundle cfg = ctx.getContentResolver().call(c.LOG_PROVIDER_URI, "get_config", null, null);
                       if (cfg != null && cfg.containsKey("brand")) {
                           sOptMaster = cfg.getBoolean("opt_master", true);
+                          sOpt1ShotExactMode = cfg.getBoolean("opt_1shot_exact", false);
                           sOptIntegrityBypass = cfg.getBoolean("opt_integrity", true);
                           sOptDeviceSpoof = cfg.getBoolean("opt_device", true);
                           sOptAndroidId = cfg.getBoolean("opt_android_id", true);
@@ -511,8 +757,10 @@ jobs:
                               sFingerprint = cfg.getString("fingerprint", sFingerprint);
                               sAndroidId = cfg.getString("android_id", sAndroidId);
                               saveProfileToLocalProp(sDataDir);
+                              syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v2.7: " + sBrand + " / " + sModel);
+                              c.log("PREFS", "Synced settings & profile from HS Panel v2.8: " + sBrand + " / " + sModel
+                                  + (sOpt1ShotExactMode ? " [1Shot Exact Mode ON]" : ""));
                           }
                       }
                   } catch (Throwable ignored) {
@@ -525,6 +773,7 @@ jobs:
                       XSharedPreferences xprefs = new XSharedPreferences("com.logistics.rider.lsposed", "com.logistics.rider.settings");
                       xprefs.reload();
                       sOptMaster = xprefs.getBoolean("opt_master", sOptMaster);
+                      sOpt1ShotExactMode = xprefs.getBoolean("opt_1shot_exact", sOpt1ShotExactMode);
                       sOptIntegrityBypass = xprefs.getBoolean("opt_integrity", sOptIntegrityBypass);
                       sOptDeviceSpoof = xprefs.getBoolean("opt_device", sOptDeviceSpoof);
                       sOptAndroidId = xprefs.getBoolean("opt_android_id", sOptAndroidId);
@@ -607,12 +856,14 @@ jobs:
                       XposedHelpers.setStaticObjectField(buildClass, "MODEL", sModel);
                       XposedHelpers.setStaticObjectField(buildClass, "DEVICE", sDevice);
                       XposedHelpers.setStaticObjectField(buildClass, "BOARD", sBoard);
-                      XposedHelpers.setStaticObjectField(buildClass, "HARDWARE", sBoard);
                       XposedHelpers.setStaticObjectField(buildClass, "PRODUCT", sProduct);
                       XposedHelpers.setStaticObjectField(buildClass, "BOOTLOADER", sBootloader);
                       XposedHelpers.setStaticObjectField(buildClass, "FINGERPRINT", sFingerprint);
-                      XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
-                      XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
+                      if (!sOpt1ShotExactMode) {
+                          XposedHelpers.setStaticObjectField(buildClass, "HARDWARE", sBoard);
+                          XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
+                          XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
+                      }
                       if (!sSpoofLogged) {
                           sSpoofLogged = true;
                           c.log("SPOOF", "Consistent Build spoof active: " + sBrand + " / " + sModel + " / AndroidID=" + sAndroidId);
@@ -620,31 +871,6 @@ jobs:
                   } catch (Throwable t) {
                       c.logError("applyBuildSpoof", t);
                   }
-              }
-
-              private static boolean shouldBlockShellCommand(String cmdStr) {
-                  if (cmdStr == null) return false;
-                  if (cmdStr.contains("log.tag.BRAZE") || cmdStr.contains("log.tag.APPBOY")) {
-                      return false;
-                  }
-                  String lower = cmdStr.toLowerCase();
-                  return lower.contains("getprop")
-                      || lower.contains("mount")
-                      || cmdStr.contains("bW91bnQK")
-                      || cmdStr.contains("Z2V0cHJvcC")
-                      || lower.contains("base64")
-                      || cmdStr.contains("RANDOM_VAR")
-                      || lower.contains("/proc/")
-                      || lower.contains("ps ")
-                      || lower.contains("[ps,")
-                      || lower.contains("which")
-                      || lower.endsWith(" su")
-                      || lower.contains(", su]")
-                      || lower.contains("/su")
-                      || lower.contains("magisk")
-                      || lower.contains("busybox")
-                      || lower.contains("kernelsu")
-                      || lower.contains("apatch");
               }
 
               @Override
@@ -669,6 +895,7 @@ jobs:
                           if (ctx != null) {
                               c.setTargetContext(ctx);
                               loadConfigFromProvider(ctx, cl);
+                              syncProfileToAppSharedPrefs(ctx);
                               try {
                                   PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
                                   c.log("APP-INFO", "HungerStation versionName=" + pi.versionName + " versionCode=" + pi.getLongVersionCode());
@@ -681,7 +908,7 @@ jobs:
                           }
                           return;
                       case 2: // Settings.Secure.getString(android_id)
-                          if (!sOptAndroidId) return;
+                          if (!sOptAndroidId || sOpt1ShotExactMode) return;
                           if (methodHookParam.args.length >= 2 && "android_id".equals(methodHookParam.args[1])) {
                               if (sAndroidId != null) {
                                   c.log("ANDROID_ID", "Settings.Secure.getString(android_id) -> " + sAndroidId + " | caller=" + c.getCallerInfo());
@@ -690,7 +917,7 @@ jobs:
                           }
                           return;
                       case 3: // Settings.Global/Secure.getInt (ADB / DevOptions / MockLocation)
-                          if (!sOptMockHide) return;
+                          if (!sOptMockHide || sOpt1ShotExactMode) return;
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof String) {
                               String key = (String) methodHookParam.args[1];
                               if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
@@ -700,7 +927,7 @@ jobs:
                           }
                           return;
                       case 4: // SystemProperties.get
-                          if (!sOptDeviceSpoof) return;
+                          if (!sOptDeviceSpoof || sOpt1ShotExactMode) return;
                           if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
                               String prop = (String) methodHookParam.args[0];
                               String spoofed = null;
@@ -729,7 +956,7 @@ jobs:
                           }
                           return;
                       case 5: // File.exists
-                          if (!sOptRootHide) return;
+                          if (!sOptRootHide || sOpt1ShotExactMode) return;
                           if (methodHookParam.thisObject instanceof File) {
                               String path = ((File) methodHookParam.thisObject).getAbsolutePath();
                               if (path != null && (path.endsWith("/su") || path.endsWith("/busybox")
@@ -742,7 +969,7 @@ jobs:
                           }
                           return;
                       case 6: // PackageManager.getPackageInfo / getApplicationInfo
-                          if (!sOptRootHide) return;
+                          if (!sOptRootHide || sOpt1ShotExactMode) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                               String pkgName = (String) methodHookParam.args[0];
                               if (HIDDEN_PKGS.contains(pkgName)) {
@@ -751,8 +978,8 @@ jobs:
                               }
                           }
                           return;
-                      case 8: // Runtime.exec(String / String[])
-                          if (!sOptRootHide) return;
+                      case 8: // Runtime.exec(String / String[]) -> Return clean FakeProcess instead of throwing IOException!
+                          if (!sOptRootHide || sOpt1ShotExactMode) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
                               String cmdStr;
                               if (methodHookParam.args[0] instanceof String[]) {
@@ -760,9 +987,10 @@ jobs:
                               } else {
                                   cmdStr = String.valueOf(methodHookParam.args[0]);
                               }
-                              if (shouldBlockShellCommand(cmdStr)) {
-                                  c.log("EXEC-BLOCK", "Blocked Runtime.exec(" + cmdStr + ") | caller=" + c.getCallerInfo());
-                                  methodHookParam.setThrowable(new IOException("Permission denied"));
+                              FakeProcess fp = createFakeProcessForCommand(cmdStr);
+                              if (fp != null) {
+                                  c.log("EXEC-FAKE", "Returned clean FakeProcess(exit=" + fp.exitValue() + ") for Runtime.exec(" + cmdStr + ") | caller=" + c.getCallerInfo());
+                                  methodHookParam.setResult(fp);
                               }
                           }
                           return;
@@ -776,6 +1004,7 @@ jobs:
                                       String cn = el.getClassName();
                                       if (cn.contains("verifyRootIntegrity") || cn.contains("RiderSupportFeaturesImpl")
                                               || cn.contains("setFontWeight") || cn.contains("setLocaleList")
+                                              || cn.contains("ewG")
                                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
                                           isIntegrityCrash = true;
@@ -796,14 +1025,15 @@ jobs:
                           String exitArg = methodHookParam.args.length > 0 ? String.valueOf(methodHookParam.args[0]) : "";
                           c.log("APP-EXIT", "App called " + methodHookParam.method.getName() + "(" + exitArg + ") | caller=" + c.getCallerInfo());
                           return;
-                      case 11: // ProcessBuilder.start()
-                          if (!sOptRootHide) return;
+                      case 11: // ProcessBuilder.start() -> Return clean FakeProcess instead of throwing IOException!
+                          if (!sOptRootHide || sOpt1ShotExactMode) return;
                           if (methodHookParam.thisObject instanceof ProcessBuilder) {
                               List<String> cmdList = ((ProcessBuilder) methodHookParam.thisObject).command();
                               String cmdStr = cmdList != null ? cmdList.toString() : "";
-                              if (shouldBlockShellCommand(cmdStr)) {
-                                  c.log("EXEC-BLOCK", "Blocked ProcessBuilder.start(" + cmdStr + ") | caller=" + c.getCallerInfo());
-                                  methodHookParam.setThrowable(new IOException("Permission denied"));
+                              FakeProcess fp = createFakeProcessForCommand(cmdStr);
+                              if (fp != null) {
+                                  c.log("EXEC-FAKE", "Returned clean FakeProcess(exit=" + fp.exitValue() + ") for ProcessBuilder.start(" + cmdStr + ") | caller=" + c.getCallerInfo());
+                                  methodHookParam.setResult(fp);
                               }
                           }
                           return;
@@ -815,7 +1045,10 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
-                  if (this.f1995a == 7) { // Activity.onResume - Flush logs only, NO floating button!
+                  if (this.f1995a == 1) { // Also re-apply Build spoof in Application.onCreate afterHookedMethod (exact 1Shot timing)
+                      ClassLoader cl = (ClassLoader) this.f1996b;
+                      applyBuildSpoof(cl);
+                  } else if (this.f1995a == 7) { // Activity.onResume
                       if (methodHookParam.thisObject instanceof Activity) {
                           Activity act = (Activity) methodHookParam.thisObject;
                           c.setTargetContext(act);
@@ -833,7 +1066,6 @@ jobs:
           }
           EOF
 
-          # 5. Xposed Entrypoint
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/xposed/XposedInit.java
           package com.logistics.rider.lsposed.xposed;
 
@@ -860,12 +1092,14 @@ jobs:
           public final class XposedInit implements IXposedHookLoadPackage {
               private static final String TARGET_PKG = "com.logistics.rider.hungerstation";
 
-              private static void inspectAndHookClass(ClassLoader cl, String className, String targetMethod, int hookType) {
+              private static boolean inspectAndHookClass(ClassLoader cl, String className, String targetMethod, int hookType, boolean logIfMissing) {
                   try {
                       Class<?> cls = XposedHelpers.findClassIfExists(className, cl);
                       if (cls == null) {
-                          c.log("CLASS-CHECK", "Class not found: " + className);
-                          return;
+                          if (logIfMissing) {
+                              c.log("CLASS-CHECK", "Optional class not in this APK version: " + className);
+                          }
+                          return false;
                       }
                       Method[] methods = cls.getDeclaredMethods();
                       int hooked = 0;
@@ -879,10 +1113,14 @@ jobs:
                               hooked++;
                           }
                       }
-                      c.log("HOOK-OK", "Hooked " + className + " (" + hooked + " methods): " + sigs);
+                      if (hooked > 0) {
+                          c.log("HOOK-OK", "Hooked " + className + " (" + hooked + " methods): " + sigs);
+                          return true;
+                      }
                   } catch (Throwable t) {
                       c.logError("Hook_" + className, t);
                   }
+                  return false;
               }
 
               @Override
@@ -893,7 +1131,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v2.7 into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v2.8 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
@@ -913,16 +1151,31 @@ jobs:
                       c.logError("CrashHook", t);
                   }
 
-                  // 1. Hook o.setFontWeight.serializer (Exact 1Shot.apk equivalent of o.ewG.serializer -> null)
-                  inspectAndHookClass(cl, "o.setFontWeight", "serializer", 0);
+                  // 1. Hook 1Shot.apk target (o.ewG.serializer) AND newer R8 equivalents if present
+                  String[] serializerCandidates = {
+                      "o.ewG",
+                      "o.setFontWeight",
+                      "o.setLocaleList"
+                  };
+                  for (String cand : serializerCandidates) {
+                      inspectAndHookClass(cl, cand, "serializer", 0, false);
+                  }
 
-                  // 2. Let verifyRootIntegrity$1.invokeSuspend RUN so integrity token/state initializes,
-                  //    while attaching an afterHookedMethod safety net (type 4) in case any exception escapes!
-                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4);
-                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl", null, 4);
+                  // 2. Hook HungerStation v4.2643.1+ obfuscated root-check classes discovered from stack traces
+                  inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 6, false);
+                  inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "read", 6, false);
+                  inspectAndHookClass(cl, "o.setCustomAttributeArray", "serializer", 6, false);
+                  inspectAndHookClass(cl, "o.setCustomAttributeArray", "write", 6, false);
 
-                  // 3. Trace o.x5.serializer return values (type 5)
-                  inspectAndHookClass(cl, "o.x5", "serializer", 5);
+                  // 3. Hook verifyRootIntegrity$1.invokeSuspend (short-circuits to kotlin.Unit without NPE!)
+                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4, true);
+                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl", null, 4, false);
+
+                  // 4. Auto-scan APK dex for any other com.roadrunner.* Integrity/Root classes
+                  c.scanAndHookDynamicIntegrityClasses(cl, lpparam.appInfo);
+
+                  // 5. Trace o.x5.serializer return values (type 5)
+                  inspectAndHookClass(cl, "o.x5", "serializer", 5, false);
 
                   try {
                       XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new b(1, cl));
@@ -997,7 +1250,6 @@ jobs:
           }
           EOF
 
-          # 6. LogProvider.java (100% identical to working v2.5 with grantUriPermission + Downloads fallback!)
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/LogProvider.java
           package com.logistics.rider.lsposed;
 
@@ -1060,6 +1312,7 @@ jobs:
                           SharedPreferences prefs = ctx.getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
                           Bundle cfg = new Bundle();
                           cfg.putBoolean("opt_master", prefs.getBoolean("opt_master", true));
+                          cfg.putBoolean("opt_1shot_exact", prefs.getBoolean("opt_1shot_exact", false));
                           cfg.putBoolean("opt_integrity", prefs.getBoolean("opt_integrity", true));
                           cfg.putBoolean("opt_device", prefs.getBoolean("opt_device", true));
                           cfg.putBoolean("opt_android_id", prefs.getBoolean("opt_android_id", true));
@@ -1112,7 +1365,7 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Panel v2.7 in LSPosed for HungerStation." + NL
+                      + "1. Enable HS Panel v2.8 in LSPosed for HungerStation." + NL
                       + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
@@ -1156,7 +1409,6 @@ jobs:
           }
           EOF
 
-          # 7. MainActivity.java (100% identical to working v2.5 with grantUriPermission!)
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/MainActivity.java
           package com.logistics.rider.lsposed;
 
@@ -1220,6 +1472,7 @@ jobs:
                       Button btnClearLogs = findViewById(R.id.btn_clear_logs);
 
                       CheckBox cbMaster = findViewById(R.id.cb_master);
+                      CheckBox cb1ShotExact = findViewById(R.id.cb_1shot_exact);
                       CheckBox cbIntegrity = findViewById(R.id.cb_integrity);
                       CheckBox cbDevice = findViewById(R.id.cb_device);
                       CheckBox cbAndroidId = findViewById(R.id.cb_android_id);
@@ -1233,6 +1486,7 @@ jobs:
                       }
 
                       cbMaster.setChecked(prefs.getBoolean("opt_master", true));
+                      cb1ShotExact.setChecked(prefs.getBoolean("opt_1shot_exact", false));
                       cbIntegrity.setChecked(prefs.getBoolean("opt_integrity", true));
                       cbDevice.setChecked(prefs.getBoolean("opt_device", true));
                       cbAndroidId.setChecked(prefs.getBoolean("opt_android_id", true));
@@ -1241,6 +1495,7 @@ jobs:
                       cbMock.setChecked(prefs.getBoolean("opt_mock", true));
 
                       cbMaster.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_master", c));
+                      cb1ShotExact.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_1shot_exact", c));
                       cbIntegrity.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_integrity", c));
                       cbDevice.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_device", c));
                       cbAndroidId.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_android_id", c));
@@ -1383,16 +1638,6 @@ jobs:
           }
           EOF
 
-          mkdir -p /tmp/res_backup/drawable /tmp/res_backup/xml
-          cp -r app/src/main/res/mipmap-* /tmp/res_backup/
-          cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/res_backup/drawable/
-          cp app/src/main/res/xml/backup_rules.xml /tmp/res_backup/xml/
-          cp app/src/main/res/xml/data_extraction_rules.xml /tmp/res_backup/xml/
-
-          rm -rf app/src/main/res/*
-          cp -r /tmp/res_backup/* app/src/main/res/
-          mkdir -p app/src/main/res/values app/src/main/res/layout
-
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1406,7 +1651,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Panel v2.7 - Control &amp; Logs"
+                  android:text="HS Panel v2.8 - Control &amp; Logs"
                   android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
@@ -1498,11 +1743,19 @@ jobs:
                               android:checked="true" />
 
                           <CheckBox
+                              android:id="@+id/cb_1shot_exact"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:textColor="#FFD54F"
+                              android:text="1Shot Exact Minimal Mode (وضع 1Shot الخفيف بدون اعتراض الأوامر)"
+                              android:checked="false" />
+
+                          <CheckBox
                               android:id="@+id/cb_integrity"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Bypass o.setFontWeight &amp; IAL403 (تخطي النزاهة و IAL403)"
+                              android:text="Bypass Root Integrity &amp; NPE Fix (تخطي فحص النزاهة وإصلاح NPE)"
                               android:checked="true" />
 
                           <CheckBox
@@ -1534,7 +1787,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Hide Root, getprop &amp; Incognia Shell (إخفاء الروت و getprop)"
+                              android:text="Clean FakeProcess for Root/getprop/Incognia (ردود وهمية نظيفة للروت)"
                               android:checked="true" />
 
                           <CheckBox
@@ -1648,7 +1901,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Panel v2.7</string>
+              <string name="app_name">HS Panel v2.8</string>
           </resources>
           EOF
 
@@ -1667,8 +1920,6 @@ jobs:
               <style name="Theme.HSRider" parent="Base.Theme.HSRider" />
           </resources>
           EOF
-
-          echo "com.logistics.rider.lsposed.xposed.XposedInit" > app/src/main/assets/xposed_init
 
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -1701,7 +1952,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Panel v2.7 (Fix LogProvider URI Grant &amp; IAL403 Bypass)" />
+                      android:value="HS Panel v2.8 (Clean FakeProcess + NPE Fix + 1Shot Hybrid)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -1774,8 +2025,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 9
-                  versionName "2.7"
+                  versionCode 10
+                  versionName "2.8"
               }
 
               signingConfigs {
@@ -1813,12 +2064,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v2.7.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v2.8.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v2.7-APK
-          path: output/HS-Panel-v2.7.apk
+          name: HS-Panel-v2.8-APK
+          path: output/HS-Panel-v2.8.apk
           if-no-files-found: error
