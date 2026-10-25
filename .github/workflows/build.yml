@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Signed HS Rider v2.4 (Standalone Two-Tab UI + VerifyRootIntegrity Fix)
+    name: Build Signed HS Rider v2.5 (Fix UI NoClassDefFoundError + VerifyRootIntegrity Fix)
     runs-on: ubuntu-latest
 
     steps:
@@ -22,7 +22,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Rider v2.4 Sources
+      - name: Clean Legacy Artifacts & Inject HS Rider v2.5 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -37,8 +37,11 @@ jobs:
                    app/src/main/java/i2 \
                    app/src/main/java/com/logistics/rider/lsposed/xposed
 
+          # 1. Pure Java device profiles + hex generator (ZERO Xposed imports so MainActivity can use it safely!)
           cat << 'EOF' > app/src/main/java/h2/a.java
           package h2;
+
+          import java.util.concurrent.ThreadLocalRandom;
 
           public abstract class a {
               public static final String[] f1907a = {
@@ -81,9 +84,20 @@ jobs:
                   "HONOR/PTP-N49/HNP-PTP:15/HONORPTP-N49/9.0.0.132C185:user/release-keys",
                   "Sony/XQ-EC54/pdx245:15/69.1.A.2.100/069001A002010000:user/release-keys"
               };
+
+              public static String randomHex(int len) {
+                  String hex = "0123456789abcdef";
+                  StringBuilder sb = new StringBuilder(len);
+                  ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                  for (int i = 0; i < len; i++) {
+                      sb.append(hex.charAt(rnd.nextInt(16)));
+                  }
+                  return sb.toString();
+              }
           }
           EOF
 
+          # 2. Diagnostic Logger (Only loaded inside hooked target process)
           cat << 'EOF' > app/src/main/java/i2/c.java
           package i2;
 
@@ -271,7 +285,7 @@ jobs:
 
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
-                  if (methodHookParam == null) return;
+                  if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
                       case 0: // RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend(Object)
                           if (!b.sOptIntegrityBypass) return;
@@ -284,11 +298,6 @@ jobs:
                           if (!b.sOptMockHide) return;
                           c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
                               + "() -> false | caller=" + c.getCallerInfo());
-                          methodHookParam.setResult(Boolean.FALSE);
-                          return;
-                      case 3: // RootBeer direct boolean methods
-                          if (!b.sOptRootHide) return;
-                          c.log("ROOT-BYPASS", "Bypassed RootBeer " + methodHookParam.method.getName() + "() -> false");
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
                       default: // InstallSourceInfo methods
@@ -350,7 +359,6 @@ jobs:
 
               private static volatile boolean sSpoofLogged = false;
 
-              // Note: com.logistics.rider.lsposed is intentionally NOT blocked here so ContentResolver can reach LogProvider!
               private static final Set<String> HIDDEN_PKGS = new HashSet<>(Arrays.asList(
                   "com.topjohnwu.magisk",
                   "io.github.vvb2060.magisk",
@@ -373,16 +381,6 @@ jobs:
               public b(int i3, Object obj) {
                   this.f1995a = i3;
                   this.f1996b = obj;
-              }
-
-              public static String generateRandomHex(int len) {
-                  String hex = "0123456789abcdef";
-                  StringBuilder sb = new StringBuilder(len);
-                  ThreadLocalRandom rnd = ThreadLocalRandom.current();
-                  for (int i = 0; i < len; i++) {
-                      sb.append(hex.charAt(rnd.nextInt(16)));
-                  }
-                  return sb.toString();
               }
 
               public static void loadConfigFromProvider(Context ctx) {
@@ -409,6 +407,7 @@ jobs:
                               sBootloader = cfg.getString("bootloader", sBootloader);
                               sFingerprint = cfg.getString("fingerprint", sFingerprint);
                               sAndroidId = cfg.getString("android_id", sAndroidId);
+                              c.log("PREFS", "Synced settings & profile from HS Rider Control Panel: " + sModel);
                           }
                       }
                   } catch (Throwable ignored) {
@@ -437,7 +436,7 @@ jobs:
                           sProduct = xprefs.getString("product", "");
                           sBootloader = xprefs.getString("bootloader", "");
                           sFingerprint = xprefs.getString("fingerprint", "");
-                          sAndroidId = xprefs.getString("android_id", generateRandomHex(16));
+                          sAndroidId = xprefs.getString("android_id", h2.a.randomHex(16));
                       }
                   } catch (Throwable ignored) {
                   }
@@ -470,7 +469,7 @@ jobs:
                           sProduct = h2.a.f1911f[idx];
                           sBootloader = h2.a.f1912g[idx];
                           sFingerprint = h2.a.h[idx];
-                          sAndroidId = generateRandomHex(16);
+                          sAndroidId = h2.a.randomHex(16);
 
                           props.setProperty("brand", sBrand);
                           props.setProperty("manufacturer", sManufacturer);
@@ -498,7 +497,7 @@ jobs:
                       sProduct = h2.a.f1911f[idx];
                       sBootloader = h2.a.f1912g[idx];
                       sFingerprint = h2.a.h[idx];
-                      sAndroidId = generateRandomHex(16);
+                      sAndroidId = h2.a.randomHex(16);
                   }
 
                   if (sOptMaster && sOptDeviceSpoof) {
@@ -685,7 +684,7 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
-                  if (this.f1995a == 7) { // Activity.onResume - Log only, NO floating button in Rider app!
+                  if (this.f1995a == 7) { // Activity.onResume - Flush logs only, NO floating button!
                       if (methodHookParam.thisObject instanceof Activity) {
                           Activity act = (Activity) methodHookParam.thisObject;
                           c.setTargetContext(act);
@@ -727,19 +726,17 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v2.4 into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v2.5 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
 
-                  // 1. Initialize consistent device profile from dataDir before any class loads
                   try {
                       b.initConsistentProfile(dataDir, cl);
                   } catch (Throwable t) {
                       c.logError("InitProfile", t);
                   }
 
-                  // 2. Hook UncaughtException (Crash Guard) & Exit Detector
                   try {
                       XposedHelpers.findAndHookMethod(ThreadGroup.class, "uncaughtException", Thread.class, Throwable.class, new b(9, null));
                       XposedHelpers.findAndHookMethod(Runtime.class, "exit", int.class, new b(10, null));
@@ -749,7 +746,6 @@ jobs:
                       c.logError("CrashHook", t);
                   }
 
-                  // 3. Surgically neutralize ONLY RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend!
                   try {
                       Class<?> verifyCls = XposedHelpers.findClassIfExists(
                           "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", cl);
@@ -757,13 +753,12 @@ jobs:
                           XposedHelpers.findAndHookMethod(verifyCls, "invokeSuspend", Object.class, new a(0));
                           c.log("HOOK-OK", "Hooked RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend");
                       } else {
-                          c.log("CLASS-CHECK", "verifyRootIntegrity$1 not found by name, Crash Guard will protect threads");
+                          c.log("CLASS-CHECK", "verifyRootIntegrity$1 not found by name, Crash Guard active");
                       }
                   } catch (Throwable t) {
                       c.logError("VerifyRootHook", t);
                   }
 
-                  // 4. Hook Application.attach(Context) and Application.onCreate()
                   try {
                       XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new b(1, cl));
                       XposedHelpers.findAndHookMethod(Application.class, "onCreate", new b(1, cl));
@@ -771,14 +766,12 @@ jobs:
                       c.logError("ApplicationHook", t);
                   }
 
-                  // 5. Hook Activity.onResume() to flush logs to HS Rider app (NO floating button overlay!)
                   try {
                       XposedHelpers.findAndHookMethod(Activity.class, "onResume", new b(7, null));
                   } catch (Throwable t) {
                       c.logError("ActivityHook", t);
                   }
 
-                  // 6. Hook Google Play Store installer verification & hide root packages
                   try {
                       Class<?> pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", cl);
                       XposedHelpers.findAndHookMethod(pmClass, "getInstallerPackageName", String.class, new b(0, TARGET_PKG));
@@ -797,7 +790,6 @@ jobs:
                       c.logError("InstallSourceInfoHook", t);
                   }
 
-                  // 7. Hook SystemProperties.get
                   try {
                       Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", cl);
                       XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, new b(4, null));
@@ -806,7 +798,6 @@ jobs:
                       c.logError("SystemPropertiesHook", t);
                   }
 
-                  // 8. Hook ANDROID_ID & Developer Options / ADB / Mock Location flags
                   try {
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getString", ContentResolver.class, String.class, new b(2, null));
                       XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
@@ -817,7 +808,6 @@ jobs:
                       c.logError("SettingsHook", t);
                   }
 
-                  // 9. Hook Mock Location detection on Location objects
                   try {
                       XposedHelpers.findAndHookMethod(Location.class, "isFromMockProvider", new a(2));
                       if (Build.VERSION.SDK_INT >= 31) {
@@ -827,7 +817,6 @@ jobs:
                       c.logError("LocationHook", t);
                   }
 
-                  // 10. Hook Root / Xposed file existence checks & Runtime.exec root filters
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
                       XposedBridge.hookAllMethods(Runtime.class, "exec", new b(8, null));
@@ -838,6 +827,7 @@ jobs:
           }
           EOF
 
+          # 3. LogProvider.java (ZERO Xposed imports!)
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/LogProvider.java
           package com.logistics.rider.lsposed;
 
@@ -952,8 +942,8 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Rider v2.4 in LSPosed for HungerStation." + NL
-                      + "2. Open HungerStation Rider, then return here to the [Logs] tab and tap Refresh.";
+                      + "1. Enable HS Panel v2.5 in LSPosed for HungerStation." + NL
+                      + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
               public static void clearLogs(Context ctx) {
@@ -996,9 +986,11 @@ jobs:
           }
           EOF
 
+          # 4. MainActivity.java - Pure Android Activity with ZERO Xposed / i2.* imports!
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/MainActivity.java
           package com.logistics.rider.lsposed;
 
+          import android.app.Activity;
           import android.content.ClipData;
           import android.content.ClipboardManager;
           import android.content.Context;
@@ -1012,24 +1004,20 @@ jobs:
           import android.widget.LinearLayout;
           import android.widget.TextView;
           import android.widget.Toast;
-          import androidx.appcompat.app.AppCompatActivity;
-          import i2.b;
           import java.util.concurrent.ThreadLocalRandom;
 
-          public final class MainActivity extends AppCompatActivity {
+          public final class MainActivity extends Activity {
               private TextView tvProfileInfo;
               private TextView tvLogs;
               private LinearLayout layoutTabFeatures;
               private LinearLayout layoutTabLogs;
-              private Button btnTabFeatures;
-              private Button btnTabLogs;
               private static final String NL = String.valueOf((char) 10);
 
               @SuppressWarnings("deprecation")
               private SharedPreferences getModulePrefs() {
                   try {
                       return getSharedPreferences("com.logistics.rider.settings", Context.MODE_WORLD_READABLE);
-                  } catch (SecurityException e) {
+                  } catch (Throwable e) {
                       return getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
                   }
               }
@@ -1037,97 +1025,104 @@ jobs:
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-                  setContentView(R.layout.activity_main);
-
                   try {
-                      grantUriPermission(
-                          "com.logistics.rider.hungerstation",
-                          Uri.parse("content://com.logistics.rider.lsposed.logprovider"),
-                          Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                      );
-                  } catch (Throwable ignored) {
-                  }
+                      setContentView(R.layout.activity_main);
 
-                  btnTabFeatures = findViewById(R.id.btn_tab_features);
-                  btnTabLogs = findViewById(R.id.btn_tab_logs);
-                  layoutTabFeatures = findViewById(R.id.layout_tab_features);
-                  layoutTabLogs = findViewById(R.id.layout_tab_logs);
-
-                  tvProfileInfo = findViewById(R.id.tv_profile_info);
-                  tvLogs = findViewById(R.id.tv_logs);
-                  Button btnRandomize = findViewById(R.id.btn_randomize);
-                  Button btnRefreshLogs = findViewById(R.id.btn_refresh_logs);
-                  Button btnCopyLogs = findViewById(R.id.btn_copy_logs);
-                  Button btnClearLogs = findViewById(R.id.btn_clear_logs);
-
-                  CheckBox cbMaster = findViewById(R.id.cb_master);
-                  CheckBox cbIntegrity = findViewById(R.id.cb_integrity);
-                  CheckBox cbDevice = findViewById(R.id.cb_device);
-                  CheckBox cbAndroidId = findViewById(R.id.cb_android_id);
-                  CheckBox cbInstaller = findViewById(R.id.cb_installer);
-                  CheckBox cbRoot = findViewById(R.id.cb_root);
-                  CheckBox cbMock = findViewById(R.id.cb_mock);
-
-                  SharedPreferences prefs = getModulePrefs();
-                  if (!prefs.contains("model")) {
-                      randomizeProfile(prefs);
-                  }
-
-                  cbMaster.setChecked(prefs.getBoolean("opt_master", true));
-                  cbIntegrity.setChecked(prefs.getBoolean("opt_integrity", true));
-                  cbDevice.setChecked(prefs.getBoolean("opt_device", true));
-                  cbAndroidId.setChecked(prefs.getBoolean("opt_android_id", true));
-                  cbInstaller.setChecked(prefs.getBoolean("opt_installer", true));
-                  cbRoot.setChecked(prefs.getBoolean("opt_root", true));
-                  cbMock.setChecked(prefs.getBoolean("opt_mock", true));
-
-                  cbMaster.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_master", c));
-                  cbIntegrity.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_integrity", c));
-                  cbDevice.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_device", c));
-                  cbAndroidId.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_android_id", c));
-                  cbInstaller.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_installer", c));
-                  cbRoot.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_root", c));
-                  cbMock.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_mock", c));
-
-                  updateUi(prefs);
-                  refreshLogs();
-
-                  btnTabFeatures.setOnClickListener(v -> {
-                      layoutTabFeatures.setVisibility(View.VISIBLE);
-                      layoutTabLogs.setVisibility(View.GONE);
-                  });
-
-                  btnTabLogs.setOnClickListener(v -> {
-                      layoutTabFeatures.setVisibility(View.GONE);
-                      layoutTabLogs.setVisibility(View.VISIBLE);
-                      refreshLogs();
-                  });
-
-                  btnRandomize.setOnClickListener(v -> {
-                      randomizeProfile(prefs);
-                      updateUi(prefs);
-                      Toast.makeText(this, "New Device & Android ID saved! Force stop & restart HungerStation.", Toast.LENGTH_LONG).show();
-                  });
-
-                  btnRefreshLogs.setOnClickListener(v -> {
-                      refreshLogs();
-                      Toast.makeText(this, "Logs refreshed", Toast.LENGTH_SHORT).show();
-                  });
-
-                  btnCopyLogs.setOnClickListener(v -> {
-                      String logs = tvLogs.getText().toString();
-                      ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                      if (cm != null) {
-                          cm.setPrimaryClip(ClipData.newPlainText("HS_Rider_Log", logs));
-                          Toast.makeText(this, "Logs copied to clipboard!", Toast.LENGTH_SHORT).show();
+                      try {
+                          grantUriPermission(
+                              "com.logistics.rider.hungerstation",
+                              Uri.parse("content://com.logistics.rider.lsposed.logprovider"),
+                              Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                          );
+                      } catch (Throwable ignored) {
                       }
-                  });
 
-                  btnClearLogs.setOnClickListener(v -> {
-                      LogProvider.clearLogs(this);
+                      Button btnTabFeatures = findViewById(R.id.btn_tab_features);
+                      Button btnTabLogs = findViewById(R.id.btn_tab_logs);
+                      layoutTabFeatures = findViewById(R.id.layout_tab_features);
+                      layoutTabLogs = findViewById(R.id.layout_tab_logs);
+
+                      tvProfileInfo = findViewById(R.id.tv_profile_info);
+                      tvLogs = findViewById(R.id.tv_logs);
+                      Button btnRandomize = findViewById(R.id.btn_randomize);
+                      Button btnRefreshLogs = findViewById(R.id.btn_refresh_logs);
+                      Button btnCopyLogs = findViewById(R.id.btn_copy_logs);
+                      Button btnClearLogs = findViewById(R.id.btn_clear_logs);
+
+                      CheckBox cbMaster = findViewById(R.id.cb_master);
+                      CheckBox cbIntegrity = findViewById(R.id.cb_integrity);
+                      CheckBox cbDevice = findViewById(R.id.cb_device);
+                      CheckBox cbAndroidId = findViewById(R.id.cb_android_id);
+                      CheckBox cbInstaller = findViewById(R.id.cb_installer);
+                      CheckBox cbRoot = findViewById(R.id.cb_root);
+                      CheckBox cbMock = findViewById(R.id.cb_mock);
+
+                      SharedPreferences prefs = getModulePrefs();
+                      if (!prefs.contains("model")) {
+                          randomizeProfile(prefs);
+                      }
+
+                      cbMaster.setChecked(prefs.getBoolean("opt_master", true));
+                      cbIntegrity.setChecked(prefs.getBoolean("opt_integrity", true));
+                      cbDevice.setChecked(prefs.getBoolean("opt_device", true));
+                      cbAndroidId.setChecked(prefs.getBoolean("opt_android_id", true));
+                      cbInstaller.setChecked(prefs.getBoolean("opt_installer", true));
+                      cbRoot.setChecked(prefs.getBoolean("opt_root", true));
+                      cbMock.setChecked(prefs.getBoolean("opt_mock", true));
+
+                      cbMaster.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_master", c));
+                      cbIntegrity.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_integrity", c));
+                      cbDevice.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_device", c));
+                      cbAndroidId.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_android_id", c));
+                      cbInstaller.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_installer", c));
+                      cbRoot.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_root", c));
+                      cbMock.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_mock", c));
+
+                      updateUi(prefs);
                       refreshLogs();
-                      Toast.makeText(this, "Logs cleared", Toast.LENGTH_SHORT).show();
-                  });
+
+                      btnTabFeatures.setOnClickListener(v -> {
+                          layoutTabFeatures.setVisibility(View.VISIBLE);
+                          layoutTabLogs.setVisibility(View.GONE);
+                      });
+
+                      btnTabLogs.setOnClickListener(v -> {
+                          layoutTabFeatures.setVisibility(View.GONE);
+                          layoutTabLogs.setVisibility(View.VISIBLE);
+                          refreshLogs();
+                      });
+
+                      btnRandomize.setOnClickListener(v -> {
+                          randomizeProfile(prefs);
+                          updateUi(prefs);
+                          Toast.makeText(this, "New Device & Android ID saved! Force stop & restart HungerStation.", Toast.LENGTH_LONG).show();
+                      });
+
+                      btnRefreshLogs.setOnClickListener(v -> {
+                          refreshLogs();
+                          Toast.makeText(this, "Logs refreshed", Toast.LENGTH_SHORT).show();
+                      });
+
+                      btnCopyLogs.setOnClickListener(v -> {
+                          String logs = tvLogs.getText().toString();
+                          ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                          if (cm != null) {
+                              cm.setPrimaryClip(ClipData.newPlainText("HS_Rider_Log", logs));
+                              Toast.makeText(this, "Logs copied to clipboard!", Toast.LENGTH_SHORT).show();
+                          }
+                      });
+
+                      btnClearLogs.setOnClickListener(v -> {
+                          LogProvider.clearLogs(this);
+                          refreshLogs();
+                          Toast.makeText(this, "Logs cleared", Toast.LENGTH_SHORT).show();
+                      });
+                  } catch (Throwable t) {
+                      TextView errTv = new TextView(this);
+                      errTv.setText("UI Error: " + t.getClass().getName() + ": " + t.getMessage());
+                      errTv.setPadding(40, 40, 40, 40);
+                      setContentView(errTv);
+                  }
               }
 
               private void saveBool(SharedPreferences prefs, String key, boolean val) {
@@ -1142,11 +1137,15 @@ jobs:
               @Override
               protected void onResume() {
                   super.onResume();
-                  refreshLogs();
+                  if (tvLogs != null) {
+                      refreshLogs();
+                  }
               }
 
               private void refreshLogs() {
-                  tvLogs.setText(LogProvider.readLogs(this));
+                  if (tvLogs != null) {
+                      tvLogs.setText(LogProvider.readLogs(this));
+                  }
               }
 
               private void randomizeProfile(SharedPreferences prefs) {
@@ -1159,7 +1158,7 @@ jobs:
                   String product = h2.a.f1911f[idx];
                   String bootloader = h2.a.f1912g[idx];
                   String fingerprint = h2.a.h[idx];
-                  String androidId = b.generateRandomHex(16);
+                  String androidId = h2.a.randomHex(16);
 
                   prefs.edit()
                       .putString("brand", brand)
@@ -1195,6 +1194,7 @@ jobs:
               }
 
               private void updateUi(SharedPreferences prefs) {
+                  if (tvProfileInfo == null) return;
                   String info = "Brand / Model: " + prefs.getString("brand", "") + " "
                       + prefs.getString("model", "") + " (" + prefs.getString("device", "") + ")" + NL
                       + "Manufacturer: " + prefs.getString("manufacturer", "") + NL
@@ -1222,15 +1222,18 @@ jobs:
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:orientation="vertical"
+              android:background="#121212"
               android:padding="16dp">
 
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Rider v2.4 - Control Panel"
+                  android:text="HS Panel v2.5 - Control &amp; Logs"
+                  android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
                   android:gravity="center"
+                  android:layout_marginTop="24dp"
                   android:layout_marginBottom="12dp" />
 
               <LinearLayout
@@ -1277,6 +1280,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:text="Spoofed Device Identity (هوية الجهاز المزيفة):"
+                              android:textColor="#90CAF9"
                               android:textStyle="bold"
                               android:textSize="14sp"
                               android:layout_marginBottom="4dp" />
@@ -1285,9 +1289,10 @@ jobs:
                               android:id="@+id/tv_profile_info"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#E0E0E0"
                               android:textSize="12sp"
                               android:padding="12dp"
-                              android:background="#1E88E51A"
+                              android:background="#1E1E1E"
                               android:layout_marginBottom="8dp" />
 
                           <Button
@@ -1301,6 +1306,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:text="Active Protection Modules (قائمة الوظائف):"
+                              android:textColor="#90CAF9"
                               android:textStyle="bold"
                               android:textSize="14sp"
                               android:layout_marginBottom="8dp" />
@@ -1309,6 +1315,7 @@ jobs:
                               android:id="@+id/cb_master"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Enable Module Master Switch (تفعيل الإضافة العام)"
                               android:checked="true" />
 
@@ -1316,6 +1323,7 @@ jobs:
                               android:id="@+id/cb_integrity"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Bypass verifyRootIntegrity &amp; Crash Guard (منع الانهيار وفحص النزاهة)"
                               android:checked="true" />
 
@@ -1323,6 +1331,7 @@ jobs:
                               android:id="@+id/cb_device"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Spoof Device Build &amp; SystemProperties (تزييف موديل وبصمة الجهاز)"
                               android:checked="true" />
 
@@ -1330,6 +1339,7 @@ jobs:
                               android:id="@+id/cb_android_id"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Spoof ANDROID_ID (تزييف معرف أندرويد)"
                               android:checked="true" />
 
@@ -1337,6 +1347,7 @@ jobs:
                               android:id="@+id/cb_installer"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Spoof Google Play Store Installer (تزييف مصدر التثبيت)"
                               android:checked="true" />
 
@@ -1344,6 +1355,7 @@ jobs:
                               android:id="@+id/cb_root"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Hide Root Files, Magisk &amp; Shell Commands (إخفاء الروت وأوامر الفحص)"
                               android:checked="true" />
 
@@ -1351,6 +1363,7 @@ jobs:
                               android:id="@+id/cb_mock"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
+                              android:textColor="#FFFFFF"
                               android:text="Hide Mock Location &amp; USB Debugging (إخفاء الموقع الوهمي وخيارات المطور)"
                               android:checked="true" />
 
@@ -1403,7 +1416,7 @@ jobs:
                       android:layout_width="match_parent"
                       android:layout_height="0dp"
                       android:layout_weight="1"
-                      android:background="#121212"
+                      android:background="#0A0A0A"
                       android:padding="10dp">
 
                       <TextView
@@ -1457,7 +1470,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Rider v2.4</string>
+              <string name="app_name">HS Panel v2.5</string>
           </resources>
           EOF
 
@@ -1472,7 +1485,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/styles.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <style name="Base.Theme.HSRider" parent="Theme.Material3.DayNight.NoActionBar" />
+              <style name="Base.Theme.HSRider" parent="@android:style/Theme.DeviceDefault.NoActionBar" />
               <style name="Theme.HSRider" parent="Base.Theme.HSRider" />
           </resources>
           EOF
@@ -1481,6 +1494,9 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.logistics.rider.lsposed">
+
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
               <queries>
                   <package android:name="com.logistics.rider.hungerstation" />
@@ -1505,7 +1521,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Rider Killer v2.4 (Standalone Control Panel &amp; Log Viewer)" />
+                      android:value="HS Panel v2.5 (Control Panel &amp; VerifyRootIntegrity Bypass)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -1578,8 +1594,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 6
-                  versionName "2.4"
+                  versionCode 7
+                  versionName "2.5"
               }
 
               signingConfigs {
@@ -1605,9 +1621,6 @@ jobs:
 
           dependencies {
               compileOnly 'de.robv.android.xposed:api:82'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
-              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
           }
           EOF
 
@@ -1620,12 +1633,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.4.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v2.5.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Rider-v2.4-APK
-          path: output/HS-Rider-v2.4.apk
+          name: HS-Panel-v2.5-APK
+          path: output/HS-Panel-v2.5.apk
           if-no-files-found: error
