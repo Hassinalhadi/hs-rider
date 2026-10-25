@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Upgrade & Build Signed HS Rider v2.0 APK
+    name: Build Signed HS Rider v2.1 (With Diagnostic Log Catcher)
     runs-on: ubuntu-latest
 
     steps:
@@ -22,65 +22,53 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject Modernized HS Rider v2.0 Sources
+      - name: Clean Legacy Artifacts & Inject HS Rider v2.1 + Log Catcher
         run: |
           set -e
-
-          # 1. Remove raw DEX/binary leftovers from JADX export
-          rm -rf app/src/main/classes.dex                  app/src/main/DebugProbesKt.bin                  app/src/main/META-INF                  app/src/main/kotlin                  app/src/main/assets/dexopt                  /tmp/hs_backup                  /tmp/res_backup
-
-          # 2. Recreate clean Java package directories
+          rm -rf app/src/main/classes.dex \
+                 app/src/main/DebugProbesKt.bin \
+                 app/src/main/META-INF \
+                 app/src/main/kotlin \
+                 app/src/main/assets/dexopt \
+                 /tmp/hs_backup \
+                 /tmp/res_backup
           rm -rf app/src/main/java/*
-          mkdir -p app/src/main/java/h2                    app/src/main/java/i2                    app/src/main/java/com/logistics/rider/lsposed/xposed
+          mkdir -p app/src/main/java/h2 \
+                   app/src/main/java/i2 \
+                   app/src/main/java/com/logistics/rider/lsposed/xposed
 
-          # Write upgraded h2/a.java (Coherent 2025/2026 Flagship Device Profiles - Android 14/15)
           cat << 'EOF' > app/src/main/java/h2/a.java
           package h2;
 
           public abstract class a {
-              // BRAND
               public static final String[] f1907a = {
                   "samsung", "samsung", "google", "Xiaomi", "OnePlus",
                   "vivo", "OPPO", "realme", "HONOR", "Sony"
               };
-
-              // MANUFACTURER
               public static final String[] f1908b = {
                   "Samsung Electronics", "Samsung Electronics", "Google", "Xiaomi", "OnePlus",
                   "vivo", "OPPO", "realme", "HONOR", "Sony"
               };
-
-              // MODEL
               public static final String[] f1909c = {
                   "SM-S938B", "SM-S928B", "Pixel 9 Pro XL", "2410DPN6CC", "CPH2653",
                   "V2405A", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
               };
-
-              // DEVICE
               public static final String[] d = {
                   "pa3q", "e3q", "komodo", "haotian", "OP5D0DL1",
                   "PD2405", "OP5CF9L1", "RE6018L1", "HNP-PTP", "pdx245"
               };
-
-              // BOARD / HARDWARE
               public static final String[] f1910e = {
                   "sun", "pineapple", "caiman", "sun", "sun",
                   "mt6991", "mt6991", "sun", "sun", "pineapple"
               };
-
-              // PRODUCT
               public static final String[] f1911f = {
                   "pa3qxxx", "e3qxxx", "komodo", "haotian", "CPH2653",
                   "PD2405", "CPH2659", "RMX5011", "PTP-N49", "XQ-EC54"
               };
-
-              // BOOTLOADER
               public static final String[] f1912g = {
                   "S938BXXU1AYA1", "S928BXXS4AXL1", "ripcurrent-15.1-12491234", "haotian-2.0.102.0", "unknown",
                   "unknown", "unknown", "unknown", "unknown", "unknown"
               };
-
-              // FINGERPRINT (Coherent with each index above)
               public static final String[] h = {
                   "samsung/pa3qxxx/pa3q:15/AP3A.240905.015.A2/S938BXXU1AYA1:user/release-keys",
                   "samsung/e3qxxx/e3q:14/UP1A.231005.007/S928BXXS4AXL1:user/release-keys",
@@ -96,7 +84,241 @@ jobs:
           }
           EOF
 
-          # Write upgraded i2/a.java (Safe serializer, boolean false & Play Store installer hook)
+          cat << 'EOF' > app/src/main/java/i2/c.java
+          package i2;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
+          import android.os.Environment;
+          import android.util.Log;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.FrameLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          import de.robv.android.xposed.XposedBridge;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.nio.charset.StandardCharsets;
+          import java.text.SimpleDateFormat;
+          import java.util.ArrayList;
+          import java.util.Date;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.concurrent.ConcurrentHashMap;
+
+          public final class c {
+              private static final List<String> sBuffer = new ArrayList<>();
+              private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
+              private static volatile Context sTargetContext;
+              private static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
+              private static final String NL = String.valueOf((char) 10);
+
+              public static void setTargetContext(Context ctx) {
+                  if (ctx != null && sTargetContext == null) {
+                      sTargetContext = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+                      flushBufferToProvider();
+                  }
+              }
+
+              public static synchronized void log(String tag, String msg) {
+                  String key = tag + ":" + msg;
+                  int count = sEventCounts.getOrDefault(key, 0) + 1;
+                  sEventCounts.put(key, count);
+                  if (count > 5 && !"INIT".equals(tag) && !"ERROR".equals(tag) && !"SERIALIZER".equals(tag)) {
+                      return;
+                  }
+                  String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
+                  String line = "[" + time + "] [" + tag + "] " + msg + (count > 1 ? " (x" + count + ")" : "");
+                  if (sBuffer.size() >= 400) {
+                      sBuffer.remove(0);
+                  }
+                  sBuffer.add(line);
+                  try {
+                      XposedBridge.log("HS-Rider-Log: " + line);
+                  } catch (Throwable ignored) {
+                  }
+                  try {
+                      Log.d("HS-Rider-Log", line);
+                  } catch (Throwable ignored) {
+                  }
+                  sendLineToProvider(line);
+                  appendToExternalFile(line);
+              }
+
+              public static synchronized void logError(String where, Throwable t) {
+                  StringBuilder sb = new StringBuilder();
+                  sb.append(where).append(" -> ").append(t.getClass().getName()).append(": ").append(t.getMessage());
+                  StackTraceElement[] stack = t.getStackTrace();
+                  if (stack != null && stack.length > 0) {
+                      int limit = Math.min(stack.length, 4);
+                      for (int i = 0; i < limit; i++) {
+                          sb.append(" | at ").append(stack[i].toString());
+                      }
+                  }
+                  log("ERROR", sb.toString());
+              }
+
+              public static String getCallerInfo() {
+                  StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+                  StringBuilder callers = new StringBuilder();
+                  int found = 0;
+                  for (StackTraceElement el : stack) {
+                      String cls = el.getClassName();
+                      if (cls.startsWith("java.") || cls.startsWith("android.")
+                              || cls.startsWith("dalvik.") || cls.startsWith("de.robv.")
+                              || cls.startsWith("org.lsposed.") || cls.startsWith("i2.")
+                              || cls.startsWith("com.logistics.rider.lsposed")
+                              || cls.contains("LspHooker")) {
+                          continue;
+                      }
+                      if (found > 0) callers.append(" <- ");
+                      callers.append(cls).append(".").append(el.getMethodName())
+                             .append(":").append(el.getLineNumber());
+                      found++;
+                      if (found >= 3) break;
+                  }
+                  return callers.length() > 0 ? callers.toString() : "system/native";
+              }
+
+              private static void flushBufferToProvider() {
+                  if (sTargetContext == null) return;
+                  List<String> snapshot;
+                  synchronized (c.class) {
+                      snapshot = new ArrayList<>(sBuffer);
+                  }
+                  for (String line : snapshot) {
+                      sendLineToProvider(line);
+                  }
+              }
+
+              private static void sendLineToProvider(String line) {
+                  Context ctx = sTargetContext;
+                  if (ctx == null) return;
+                  try {
+                      ctx.getContentResolver().call(LOG_PROVIDER_URI, "log", line, null);
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              private static void appendToExternalFile(String line) {
+                  try {
+                      Context ctx = sTargetContext;
+                      if (ctx != null) {
+                          File extDir = ctx.getExternalFilesDir(null);
+                          if (extDir != null) {
+                              File f = new File(extDir, "HS_Rider_Debug.log");
+                              try (FileOutputStream fos = new FileOutputStream(f, true)) {
+                                  fos.write((line + NL).getBytes(StandardCharsets.UTF_8));
+                              }
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  try {
+                      File dl = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "HS_Rider_Debug.log");
+                      try (FileOutputStream fos = new FileOutputStream(dl, true)) {
+                          fos.write((line + NL).getBytes(StandardCharsets.UTF_8));
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              public static synchronized String getAllLogsText() {
+                  if (sBuffer.isEmpty()) {
+                      return "No logs captured yet.";
+                  }
+                  StringBuilder sb = new StringBuilder();
+                  for (String line : sBuffer) {
+                      sb.append(line).append(NL);
+                  }
+                  return sb.toString();
+              }
+
+              public static void attachFloatingBadge(final Activity activity) {
+                  if (activity == null) return;
+                  try {
+                      View decor = activity.getWindow().getDecorView();
+                      if (!(decor instanceof ViewGroup)) return;
+                      ViewGroup root = (ViewGroup) decor;
+                      if (root.findViewWithTag("hs_rider_log_badge") != null) return;
+
+                      TextView badge = new TextView(activity);
+                      badge.setTag("hs_rider_log_badge");
+                      badge.setText("HS Log");
+                      badge.setTextColor(Color.WHITE);
+                      badge.setTextSize(12f);
+                      badge.setPadding(28, 16, 28, 16);
+
+                      GradientDrawable bg = new GradientDrawable();
+                      bg.setColor(Color.parseColor("#CC1E88E5"));
+                      bg.setCornerRadius(40f);
+                      bg.setStroke(2, Color.WHITE);
+                      badge.setBackground(bg);
+
+                      FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          Gravity.TOP | Gravity.START
+                      );
+                      lp.topMargin = 140;
+                      lp.leftMargin = 24;
+                      badge.setElevation(100f);
+
+                      badge.setOnClickListener(v -> showInAppLogDialog(activity));
+                      root.addView(badge, lp);
+                  } catch (Throwable t) {
+                      logError("attachFloatingBadge", t);
+                  }
+              }
+
+              private static void showInAppLogDialog(final Activity activity) {
+                  try {
+                      final String logs = getAllLogsText();
+                      ScrollView scroll = new ScrollView(activity);
+                      TextView tv = new TextView(activity);
+                      tv.setText(logs);
+                      tv.setTextSize(11f);
+                      tv.setTextColor(Color.parseColor("#00E676"));
+                      tv.setBackgroundColor(Color.parseColor("#121212"));
+                      tv.setPadding(32, 32, 32, 32);
+                      tv.setTextIsSelectable(true);
+                      scroll.addView(tv);
+
+                      new AlertDialog.Builder(activity)
+                          .setTitle("HS Rider Diagnostic Log")
+                          .setView(scroll)
+                          .setPositiveButton("Copy Log", (d, w) -> {
+                              ClipboardManager cm = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+                              if (cm != null) {
+                                  cm.setPrimaryClip(ClipData.newPlainText("HS_Rider_Log", logs));
+                                  Toast.makeText(activity, "Copied to clipboard!", Toast.LENGTH_SHORT).show();
+                              }
+                          })
+                          .setNeutralButton("Clear", (d, w) -> {
+                              synchronized (c.class) {
+                                  sBuffer.clear();
+                                  sEventCounts.clear();
+                              }
+                              Toast.makeText(activity, "Logs cleared", Toast.LENGTH_SHORT).show();
+                          })
+                          .setNegativeButton("Close", null)
+                          .show();
+                  } catch (Throwable t) {
+                      logError("showInAppLogDialog", t);
+                  }
+              }
+          }
+          EOF
+
           cat << 'EOF' > app/src/main/java/i2/a.java
           package i2;
 
@@ -114,12 +336,18 @@ jobs:
                   if (methodHookParam == null) return;
                   switch (this.f1994a) {
                       case 0:
+                          c.log("SERIALIZER", "Blocked " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName() + "() -> null | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(null);
                           return;
                       case 2:
+                          c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
+                              + "() -> false | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
                       default:
+                          c.log("INSTALLER", "Spoofed " + methodHookParam.method.getName()
+                              + "() -> com.android.vending | caller=" + c.getCallerInfo());
                           methodHookParam.setResult("com.android.vending");
                           return;
                   }
@@ -127,20 +355,24 @@ jobs:
           }
           EOF
 
-          # Write upgraded i2/b.java (Coherent Device + XSharedPreferences + SystemProperties + Android ID + Anti-Detection)
           cat << 'EOF' > app/src/main/java/i2/b.java
           package i2;
 
+          import android.app.Activity;
           import android.app.Application;
           import android.content.Context;
           import android.content.SharedPreferences;
+          import android.content.pm.PackageInfo;
           import android.content.pm.PackageManager;
           import android.os.Build;
           import de.robv.android.xposed.XC_MethodHook;
           import de.robv.android.xposed.XSharedPreferences;
-          import de.robv.android.xposed.XposedBridge;
           import de.robv.android.xposed.XposedHelpers;
+          import java.lang.reflect.Field;
+          import java.lang.reflect.Method;
           import java.util.Objects;
+          import java.util.Set;
+          import java.util.concurrent.ConcurrentHashMap;
           import java.util.concurrent.ThreadLocalRandom;
 
           public final class b extends XC_MethodHook {
@@ -156,6 +388,7 @@ jobs:
               public static volatile String sBootloader;
               public static volatile String sFingerprint;
               public static volatile String sAndroidId;
+              private static final Set<String> sInspectedClasses = ConcurrentHashMap.newKeySet();
 
               public b(int i3, Object obj) {
                   this.f1995a = i3;
@@ -187,8 +420,9 @@ jobs:
                       XposedHelpers.setStaticObjectField(buildClass, "FINGERPRINT", sFingerprint);
                       XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
                       XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
+                      c.log("SPOOF", "Applied Build spoof: " + sBrand + " / " + sModel + " / AndroidID=" + sAndroidId);
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: Failed to set Build fields: " + t.getMessage());
+                      c.logError("applyBuildSpoof", t);
                   }
               }
 
@@ -207,12 +441,24 @@ jobs:
                           sBootloader = xprefs.getString("bootloader", sBootloader);
                           sFingerprint = xprefs.getString("fingerprint", sFingerprint);
                           sAndroidId = xprefs.getString("android_id", sAndroidId);
+                          c.log("PREFS", "Loaded profile from XSharedPreferences: " + sModel);
+                      } else {
+                          c.log("PREFS", "XSharedPreferences empty or not readable, using target app local prefs");
                       }
-                  } catch (Throwable ignored) {
+                  } catch (Throwable t) {
+                      c.logError("loadFromXSharedPrefs", t);
                   }
               }
 
               public static void initAndSpoofFromContext(Context context, ClassLoader cl) {
+                  if (context != null) {
+                      c.setTargetContext(context);
+                      try {
+                          PackageInfo pi = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+                          c.log("APP-INFO", "HungerStation versionName=" + pi.versionName + " versionCode=" + pi.getLongVersionCode());
+                      } catch (Throwable ignored) {
+                      }
+                  }
                   loadFromXSharedPrefs();
                   if (context == null) {
                       applyBuildSpoof(cl);
@@ -258,7 +504,6 @@ jobs:
                   sFingerprint = prefs.getString("fingerprint", h2.a.h[idx]);
                   sAndroidId = prefs.getString("android_id", generateRandomHex(16));
 
-                  // Override with latest values from module UI if available
                   loadFromXSharedPrefs();
                   applyBuildSpoof(cl);
               }
@@ -267,12 +512,13 @@ jobs:
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
                   switch (this.f1995a) {
-                      case 0: // getInstallerPackageName(String)
+                      case 0:
                           if (methodHookParam.args.length > 0 && Objects.equals(methodHookParam.args[0], this.f1996b)) {
+                              c.log("INSTALLER", "getInstallerPackageName(" + methodHookParam.args[0] + ") -> com.android.vending | caller=" + c.getCallerInfo());
                               methodHookParam.setResult("com.android.vending");
                           }
                           return;
-                      case 1: // Application.attach(Context) or Application.onCreate()
+                      case 1:
                           ClassLoader cl = (ClassLoader) this.f1996b;
                           Context ctx = null;
                           if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof Context) {
@@ -282,50 +528,61 @@ jobs:
                           }
                           initAndSpoofFromContext(ctx, cl);
                           return;
-                      case 2: // Settings.Secure.getString(ContentResolver, String)
+                      case 2:
                           if (methodHookParam.args.length >= 2 && "android_id".equals(methodHookParam.args[1])) {
                               if (sAndroidId != null) {
+                                  c.log("ANDROID_ID", "Settings.Secure.getString(android_id) -> " + sAndroidId + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(sAndroidId);
                               }
                           }
                           return;
-                      case 3: // Settings.Global.getInt / Settings.Secure.getInt (ADB / Dev Options / Mock Location)
+                      case 3:
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof String) {
                               String key = (String) methodHookParam.args[1];
                               if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
+                                  c.log("SETTINGS", "Hid setting " + key + " -> 0 | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(0);
                               }
                           }
                           return;
-                      case 4: // SystemProperties.get(String) / get(String, String)
+                      case 4:
                           if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
                               String prop = (String) methodHookParam.args[0];
-                              if ("ro.product.brand".equals(prop) && sBrand != null) methodHookParam.setResult(sBrand);
-                              else if ("ro.product.manufacturer".equals(prop) && sManufacturer != null) methodHookParam.setResult(sManufacturer);
-                              else if ("ro.product.model".equals(prop) && sModel != null) methodHookParam.setResult(sModel);
-                              else if ("ro.product.device".equals(prop) && sDevice != null) methodHookParam.setResult(sDevice);
-                              else if ("ro.product.board".equals(prop) && sBoard != null) methodHookParam.setResult(sBoard);
-                              else if ("ro.product.name".equals(prop) && sProduct != null) methodHookParam.setResult(sProduct);
-                              else if ("ro.bootloader".equals(prop) && sBootloader != null) methodHookParam.setResult(sBootloader);
-                              else if ("ro.build.fingerprint".equals(prop) && sFingerprint != null) methodHookParam.setResult(sFingerprint);
-                              else if ("ro.build.tags".equals(prop)) methodHookParam.setResult("release-keys");
-                              else if ("ro.build.type".equals(prop)) methodHookParam.setResult("user");
-                              else if ("ro.debuggable".equals(prop)) methodHookParam.setResult("0");
-                              else if ("ro.secure".equals(prop)) methodHookParam.setResult("1");
+                              String spoofed = null;
+                              if ("ro.product.brand".equals(prop)) spoofed = sBrand;
+                              else if ("ro.product.manufacturer".equals(prop)) spoofed = sManufacturer;
+                              else if ("ro.product.model".equals(prop)) spoofed = sModel;
+                              else if ("ro.product.device".equals(prop)) spoofed = sDevice;
+                              else if ("ro.product.board".equals(prop)) spoofed = sBoard;
+                              else if ("ro.product.name".equals(prop)) spoofed = sProduct;
+                              else if ("ro.bootloader".equals(prop)) spoofed = sBootloader;
+                              else if ("ro.build.fingerprint".equals(prop)) spoofed = sFingerprint;
+                              else if ("ro.build.tags".equals(prop)) spoofed = "release-keys";
+                              else if ("ro.build.type".equals(prop)) spoofed = "user";
+                              else if ("ro.debuggable".equals(prop)) spoofed = "0";
+                              else if ("ro.secure".equals(prop)) spoofed = "1";
+
+                              if (spoofed != null) {
+                                  c.log("SYSPROP", "SystemProperties.get(" + prop + ") -> " + spoofed + " | caller=" + c.getCallerInfo());
+                                  methodHookParam.setResult(spoofed);
+                              } else if (prop.startsWith("ro.") || prop.contains("qemu") || prop.contains("root") || prop.contains("xposed")) {
+                                  c.log("SYSPROP-QUERY", "App queried unspoofed prop: " + prop + " | caller=" + c.getCallerInfo());
+                              }
                           }
                           return;
-                      case 5: // File.exists() - hide su / root / magisk paths
+                      case 5:
                           if (methodHookParam.thisObject instanceof java.io.File) {
                               String path = ((java.io.File) methodHookParam.thisObject).getAbsolutePath();
                               if (path != null && (path.endsWith("/su") || path.endsWith("/busybox")
                                       || path.contains("magisk") || path.contains("Superuser")
                                       || path.contains("kernelsu") || path.contains("apatch")
                                       || path.contains("lsposed") || path.contains("xposed"))) {
+                                  c.log("ROOT-CHECK", "Blocked File.exists(" + path + ") -> false | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(Boolean.FALSE);
                               }
                           }
                           return;
-                      case 6: // PackageManager.getPackageInfo(String, int) - hide module, LSPosed, Magisk, KernelSU
+                      case 6:
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                               String pkgName = (String) methodHookParam.args[0];
                               if ("com.logistics.rider.lsposed".equals(pkgName)
@@ -333,6 +590,7 @@ jobs:
                                       || "org.lsposed.manager".equals(pkgName)
                                       || "de.robv.android.xposed.installer".equals(pkgName)
                                       || "me.weishu.kernelsu".equals(pkgName)) {
+                                  c.log("PKG-CHECK", "Hid installed package query: " + pkgName + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setThrowable(new PackageManager.NameNotFoundException(pkgName));
                               }
                           }
@@ -341,13 +599,45 @@ jobs:
                           return;
                   }
               }
+
+              @Override
+              protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
+                  if (methodHookParam == null) return;
+                  if (this.f1995a == 7) {
+                      if (methodHookParam.thisObject instanceof Activity) {
+                          Activity act = (Activity) methodHookParam.thisObject;
+                          c.setTargetContext(act);
+                          c.log("ACTIVITY", "Resumed activity: " + act.getClass().getName());
+                          c.attachFloatingBadge(act);
+                      }
+                  } else if (this.f1995a == 8) {
+                      Class<?> loaded = (Class<?>) methodHookParam.getResult();
+                      if (loaded != null) {
+                          String name = loaded.getName();
+                          if (name.startsWith("o.") && sInspectedClasses.add(name)) {
+                              try {
+                                  Method m = loaded.getDeclaredMethod("serializer");
+                                  if (m != null) {
+                                      StringBuilder fieldsInfo = new StringBuilder();
+                                      for (Field f : loaded.getDeclaredFields()) {
+                                          fieldsInfo.append(f.getName()).append(":").append(f.getType().getSimpleName()).append(", ");
+                                      }
+                                      c.log("O-CLASS-FOUND", "Found obfuscated class with serializer(): " + name + " | fields=[" + fieldsInfo + "]");
+                                  }
+                              } catch (NoSuchMethodException ignored) {
+                              } catch (Throwable ignored) {
+                              }
+                          }
+                      }
+                  }
+              }
           }
           EOF
 
-          # Write upgraded XposedInit.java with fault-tolerant isolated hooks
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/xposed/XposedInit.java
           package com.logistics.rider.lsposed.xposed;
 
+          import android.app.Activity;
           import android.app.Application;
           import android.content.ContentResolver;
           import android.content.Context;
@@ -355,12 +645,13 @@ jobs:
           import android.os.Build;
           import android.provider.Settings;
           import de.robv.android.xposed.IXposedHookLoadPackage;
-          import de.robv.android.xposed.XposedBridge;
           import de.robv.android.xposed.XposedHelpers;
           import de.robv.android.xposed.callbacks.XC_LoadPackage;
           import i2.a;
           import i2.b;
+          import i2.c;
           import java.io.File;
+          import java.lang.reflect.Field;
           import java.util.concurrent.ThreadLocalRandom;
 
           public final class XposedInit implements IXposedHookLoadPackage {
@@ -372,8 +663,11 @@ jobs:
                       return;
                   }
                   final ClassLoader cl = lpparam.classLoader;
+                  c.log("INIT", "Loaded into package=" + lpparam.packageName
+                      + " process=" + lpparam.processName
+                      + " SDK=" + Build.VERSION.SDK_INT
+                      + " realModel=" + Build.MODEL);
 
-                  // 1. Pre-initialize coherent device profile immediately before any class loads
                   try {
                       int idx = ThreadLocalRandom.current().nextInt(h2.a.f1907a.length);
                       b.sBrand = h2.a.f1907a[idx];
@@ -388,24 +682,31 @@ jobs:
                       b.loadFromXSharedPrefs();
                       b.applyBuildSpoof(cl);
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: Pre-init spoof error: " + t.getMessage());
+                      c.logError("PreInitSpoof", t);
                   }
 
-                  // 2. Hook Application.attach(Context) and Application.onCreate() to load saved profile early
                   try {
                       XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new b(1, cl));
                       XposedHelpers.findAndHookMethod(Application.class, "onCreate", new b(1, cl));
+                      c.log("HOOK-OK", "Hooked Application.attach & Application.onCreate");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: Application hook error: " + t.getMessage());
+                      c.logError("ApplicationHook", t);
                   }
 
-                  // 3. Hook Google Play Store installer verification & hide root/module packages
+                  try {
+                      XposedHelpers.findAndHookMethod(Activity.class, "onResume", new b(7, null));
+                      c.log("HOOK-OK", "Hooked Activity.onResume (Floating Log Badge enabled)");
+                  } catch (Throwable t) {
+                      c.logError("ActivityHook", t);
+                  }
+
                   try {
                       Class<?> pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", cl);
                       XposedHelpers.findAndHookMethod(pmClass, "getInstallerPackageName", String.class, new b(0, TARGET_PKG));
                       XposedHelpers.findAndHookMethod(pmClass, "getPackageInfo", String.class, int.class, new b(6, null));
+                      c.log("HOOK-OK", "Hooked ApplicationPackageManager (Installer + Package Hiding)");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: PackageManager hook error: " + t.getMessage());
+                      c.logError("PackageManagerHook", t);
                   }
 
                   try {
@@ -413,63 +714,170 @@ jobs:
                       XposedHelpers.findAndHookMethod(isiClass, "getInstallingPackageName", new a(1));
                       XposedHelpers.findAndHookMethod(isiClass, "getInitiatingPackageName", new a(1));
                       XposedHelpers.findAndHookMethod(isiClass, "getOriginatingPackageName", new a(1));
+                      c.log("HOOK-OK", "Hooked InstallSourceInfo (All 3 package methods)");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: InstallSourceInfo hook error: " + t.getMessage());
+                      c.logError("InstallSourceInfoHook", t);
                   }
 
-                  // 4. Hook SystemProperties.get for native/reflection device property checks
                   try {
                       Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", cl);
                       XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, new b(4, null));
                       XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, new b(4, null));
+                      c.log("HOOK-OK", "Hooked android.os.SystemProperties.get");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: SystemProperties hook error: " + t.getMessage());
+                      c.logError("SystemPropertiesHook", t);
                   }
 
-                  // 5. Hook ANDROID_ID & Developer Options / ADB / Mock Location flags
                   try {
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getString", ContentResolver.class, String.class, new b(2, null));
                       XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, new b(3, null));
+                      c.log("HOOK-OK", "Hooked Settings.Secure & Settings.Global (ANDROID_ID + ADB/DevOptions)");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: Settings hook error: " + t.getMessage());
+                      c.logError("SettingsHook", t);
                   }
 
-                  // 6. Hook Mock Location detection on Location objects
                   try {
                       XposedHelpers.findAndHookMethod(Location.class, "isFromMockProvider", new a(2));
                       if (Build.VERSION.SDK_INT >= 31) {
                           XposedHelpers.findAndHookMethod(Location.class, "isMock", new a(2));
                       }
+                      c.log("HOOK-OK", "Hooked Location mock detection methods");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: Location hook error: " + t.getMessage());
+                      c.logError("LocationHook", t);
                   }
 
-                  // 7. Hook Root / Xposed file existence checks
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
+                      c.log("HOOK-OK", "Hooked File.exists root/xposed path filter");
                   } catch (Throwable t) {
-                      XposedBridge.log("HS-Rider: File.exists hook error: " + t.getMessage());
+                      c.logError("FileExistsHook", t);
                   }
 
-                  // 8. Safely hook legacy o.ewG.serializer if present in target version (without crashing if renamed)
                   try {
                       Class<?> legacyClass = XposedHelpers.findClassIfExists("o.ewG", cl);
                       if (legacyClass != null) {
+                          StringBuilder fields = new StringBuilder();
+                          for (Field f : legacyClass.getDeclaredFields()) {
+                              fields.append(f.getName()).append(":").append(f.getType().getSimpleName()).append(", ");
+                          }
+                          c.log("CLASS-CHECK", "Class o.ewG FOUND in this APK! Fields=[" + fields + "]");
                           XposedHelpers.findAndHookMethod(legacyClass, "serializer", new a(0));
+                          c.log("HOOK-OK", "Hooked o.ewG.serializer()");
+                      } else {
+                          c.log("CLASS-CHECK", "WARN: Class o.ewG NOT FOUND in this version of HungerStation! Enabling dynamic o.* class scanner...");
+                          XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, new b(8, null));
                       }
-                  } catch (Throwable ignored) {
+                  } catch (Throwable t) {
+                      c.logError("LegacyClassCheck", t);
                   }
               }
           }
           EOF
 
-          # Write upgraded MainActivity.java synced with LSPosed XSharedPreferences
+          cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/LogProvider.java
+          package com.logistics.rider.lsposed;
+
+          import android.content.ContentProvider;
+          import android.content.ContentValues;
+          import android.content.Context;
+          import android.database.Cursor;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.nio.charset.StandardCharsets;
+          import java.nio.file.Files;
+
+          public final class LogProvider extends ContentProvider {
+              public static final String LOG_FILE_NAME = "hs_diagnostic.log";
+              private static final String NL = String.valueOf((char) 10);
+
+              @Override
+              public boolean onCreate() {
+                  return true;
+              }
+
+              @Override
+              public Bundle call(String method, String arg, Bundle extras) {
+                  Context ctx = getContext();
+                  if (ctx == null) return null;
+                  File f = new File(ctx.getFilesDir(), LOG_FILE_NAME);
+                  try {
+                      if ("log".equals(method) && arg != null) {
+                          synchronized (LogProvider.class) {
+                              if (f.exists() && f.length() > 256 * 1024) {
+                                  f.delete();
+                              }
+                              try (FileOutputStream fos = new FileOutputStream(f, true)) {
+                                  fos.write((arg + NL).getBytes(StandardCharsets.UTF_8));
+                              }
+                          }
+                      } else if ("clear".equals(method)) {
+                          synchronized (LogProvider.class) {
+                              if (f.exists()) f.delete();
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return Bundle.EMPTY;
+              }
+
+              public static String readLogs(Context ctx) {
+                  try {
+                      File f = new File(ctx.getFilesDir(), LOG_FILE_NAME);
+                      if (f.exists()) {
+                          byte[] bytes = Files.readAllBytes(f.toPath());
+                          String content = new String(bytes, StandardCharsets.UTF_8).trim();
+                          if (!content.isEmpty()) return content;
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return "No logs received yet." + NL + "1. Enable module in LSPosed for HungerStation." + NL + "2. Open HungerStation and tap the floating [HS Log] button at the top-left.";
+              }
+
+              public static void clearLogs(Context ctx) {
+                  try {
+                      File f = new File(ctx.getFilesDir(), LOG_FILE_NAME);
+                      if (f.exists()) f.delete();
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              @Override
+              public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
+                  return null;
+              }
+
+              @Override
+              public String getType(Uri uri) {
+                  return null;
+              }
+
+              @Override
+              public Uri insert(Uri uri, ContentValues values) {
+                  return null;
+              }
+
+              @Override
+              public int delete(Uri uri, String selection, String[] selectionArgs) {
+                  return 0;
+              }
+
+              @Override
+              public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+                  return 0;
+              }
+          }
+          EOF
+
           cat << 'EOF' > app/src/main/java/com/logistics/rider/lsposed/MainActivity.java
           package com.logistics.rider.lsposed;
 
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
           import android.content.Context;
           import android.content.SharedPreferences;
           import android.os.Bundle;
@@ -482,6 +890,8 @@ jobs:
 
           public final class MainActivity extends AppCompatActivity {
               private TextView tvProfileInfo;
+              private TextView tvLogs;
+              private static final String NL = String.valueOf((char) 10);
 
               @SuppressWarnings("deprecation")
               private SharedPreferences getModulePrefs() {
@@ -498,19 +908,54 @@ jobs:
                   setContentView(R.layout.activity_main);
 
                   tvProfileInfo = findViewById(R.id.tv_profile_info);
+                  tvLogs = findViewById(R.id.tv_logs);
                   Button btnRandomize = findViewById(R.id.btn_randomize);
+                  Button btnRefreshLogs = findViewById(R.id.btn_refresh_logs);
+                  Button btnCopyLogs = findViewById(R.id.btn_copy_logs);
+                  Button btnClearLogs = findViewById(R.id.btn_clear_logs);
 
                   SharedPreferences prefs = getModulePrefs();
                   if (!prefs.contains("model")) {
                       randomizeProfile(prefs);
                   }
                   updateUi(prefs);
+                  refreshLogs();
 
                   btnRandomize.setOnClickListener(v -> {
                       randomizeProfile(prefs);
                       updateUi(prefs);
-                      Toast.makeText(this, "تم تحديث هوية الجهاز و Android ID بنجاح! أعد تشغيل تطبيق المندوب لتطبيقها.", Toast.LENGTH_LONG).show();
+                      Toast.makeText(this, "Device identity & Android ID updated! Restart HungerStation.", Toast.LENGTH_LONG).show();
                   });
+
+                  btnRefreshLogs.setOnClickListener(v -> {
+                      refreshLogs();
+                      Toast.makeText(this, "Logs refreshed", Toast.LENGTH_SHORT).show();
+                  });
+
+                  btnCopyLogs.setOnClickListener(v -> {
+                      String logs = tvLogs.getText().toString();
+                      ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                      if (cm != null) {
+                          cm.setPrimaryClip(ClipData.newPlainText("HS_Rider_Log", logs));
+                          Toast.makeText(this, "Logs copied to clipboard!", Toast.LENGTH_SHORT).show();
+                      }
+                  });
+
+                  btnClearLogs.setOnClickListener(v -> {
+                      LogProvider.clearLogs(this);
+                      refreshLogs();
+                      Toast.makeText(this, "Logs cleared", Toast.LENGTH_SHORT).show();
+                  });
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  refreshLogs();
+              }
+
+              private void refreshLogs() {
+                  tvLogs.setText(LogProvider.readLogs(this));
               }
 
               private void randomizeProfile(SharedPreferences prefs) {
@@ -531,40 +976,15 @@ jobs:
               }
 
               private void updateUi(SharedPreferences prefs) {
-                  String info = "الحالة: نشط (HS Rider v2.0 Modern)
-"
-                      + "التطبيق المستهدف: com.logistics.rider.hungerstation
-
-"
-                      + "الحمايات المفعلة تلقائياً:
-"
-                      + "• تزييف متطابق لهوية الجهاز (Build + SystemProperties)
-"
-                      + "• تزييف معرف الجهاز (ANDROID_ID)
-"
-                      + "• تزييف مصدر التثبيت (Google Play Store)
-"
-                      + "• إخفاء خيارات المطور و USB Debugging
-"
-                      + "• إخفاء الموقع الوهمي (Mock Location) والروت وإخفاء الإضافة
-
-"
-                      + "الهوية الحالية المرسلة للتطبيق:
-"
-                      + "الشركة: " + prefs.getString("brand", "") + " (" + prefs.getString("manufacturer", "") + ")
-"
-                      + "الموديل: " + prefs.getString("model", "") + " [" + prefs.getString("device", "") + "]
-"
-                      + "Android ID: " + prefs.getString("android_id", "") + "
-"
-                      + "البصمة:
-" + prefs.getString("fingerprint", "");
+                  String info = "Device: " + prefs.getString("brand", "") + " "
+                      + prefs.getString("model", "") + " [" + prefs.getString("device", "") + "]" + NL
+                      + "Android ID: " + prefs.getString("android_id", "") + NL
+                      + "Fingerprint: " + prefs.getString("fingerprint", "");
                   tvProfileInfo.setText(info);
               }
           }
           EOF
 
-          # 3. Clean decompiled library resources & keep only app resources
           mkdir -p /tmp/res_backup/drawable /tmp/res_backup/xml
           cp -r app/src/main/res/mipmap-* /tmp/res_backup/
           cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/res_backup/drawable/
@@ -575,7 +995,6 @@ jobs:
           cp -r /tmp/res_backup/* app/src/main/res/
           mkdir -p app/src/main/res/values app/src/main/res/layout
 
-          # Write modern interactive activity_main.xml
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -583,38 +1002,86 @@ jobs:
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:orientation="vertical"
-              android:padding="24dp"
-              android:gravity="center_horizontal">
+              android:padding="16dp">
 
               <TextView
-                  android:layout_width="wrap_content"
+                  android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Rider Killer v2.0"
-                  android:textSize="22sp"
+                  android:text="HS Rider v2.1 - Diagnostic &amp; Spoofer"
+                  android:textSize="20sp"
                   android:textStyle="bold"
-                  android:layout_marginTop="16dp"
-                  android:layout_marginBottom="16dp" />
+                  android:gravity="center"
+                  android:layout_marginBottom="8dp" />
 
               <TextView
                   android:id="@+id/tv_profile_info"
                   android:layout_width="match_parent"
-                  android:layout_height="0dp"
-                  android:layout_weight="1"
-                  android:textSize="14sp"
-                  android:lineSpacingExtra="4dp"
-                  android:padding="16dp" />
+                  android:layout_height="wrap_content"
+                  android:textSize="12sp"
+                  android:padding="10dp"
+                  android:background="#1E88E51A"
+                  android:layout_marginBottom="8dp" />
 
               <Button
                   android:id="@+id/btn_randomize"
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="توليد هوية جهاز جديدة"
-                  android:layout_marginTop="16dp" />
+                  android:text="Randomize Device Identity"
+                  android:layout_marginBottom="8dp" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:layout_marginBottom="8dp">
+
+                  <Button
+                      android:id="@+id/btn_refresh_logs"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="Refresh"
+                      android:textSize="12sp" />
+
+                  <Button
+                      android:id="@+id/btn_copy_logs"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="Copy Log"
+                      android:textSize="12sp"
+                      android:layout_marginStart="6dp"
+                      android:layout_marginEnd="6dp" />
+
+                  <Button
+                      android:id="@+id/btn_clear_logs"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="Clear"
+                      android:textSize="12sp" />
+              </LinearLayout>
+
+              <ScrollView
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:background="#121212"
+                  android:padding="10dp">
+
+                  <TextView
+                      android:id="@+id/tv_logs"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:textColor="#00E676"
+                      android:textSize="11sp"
+                      android:fontFamily="monospace"
+                      android:textIsSelectable="true" />
+              </ScrollView>
 
           </LinearLayout>
           EOF
 
-          # Restore valid AAPT inline gradient in ic_launcher_foreground.xml
           cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
           <?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -652,7 +1119,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Rider v2.0</string>
+              <string name="app_name">HS Rider v2.1</string>
           </resources>
           EOF
 
@@ -672,7 +1139,6 @@ jobs:
           </resources>
           EOF
 
-          # 4. Write updated AndroidManifest.xml with MainActivity registered for Launcher & LSPosed Settings
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -697,7 +1163,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Rider Killer v2.0 (Modern Device &amp; Integrity Spoofer)" />
+                      android:value="HS Rider Killer v2.1 (With Live Diagnostic Log Catcher)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -712,11 +1178,15 @@ jobs:
                       </intent-filter>
                   </activity>
 
+                  <provider
+                      android:name=".LogProvider"
+                      android:authorities="com.logistics.rider.lsposed.logprovider"
+                      android:exported="true" />
+
               </application>
           </manifest>
           EOF
 
-          # 5. Update Gradle configuration files for modern Android build
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
@@ -762,13 +1232,12 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "2.1"
               }
 
               signingConfigs {
                   debug {
-                      // Uses standard Android debug keystore automatically generated in CI
                   }
               }
 
@@ -805,12 +1274,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.0.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.1.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Rider-v2.0-APK
-          path: output/HS-Rider-v2.0.apk
+          name: HS-Rider-v2.1-APK
+          path: output/HS-Rider-v2.1.apk
           if-no-files-found: error
