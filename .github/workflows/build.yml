@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Signed HS Rider v2.2 (Crash Fix + Deep Caller & Crash Logger)
+    name: Build Signed HS Rider v2.3 (VerifyRootIntegrity + Incognia Bypass)
     runs-on: ubuntu-latest
 
     steps:
@@ -22,7 +22,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Rider v2.2 Sources
+      - name: Clean Legacy Artifacts & Inject HS Rider v2.3 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -134,7 +134,8 @@ jobs:
                   int count = sEventCounts.getOrDefault(key, 0) + 1;
                   sEventCounts.put(key, count);
                   boolean isCritical = "INIT".equals(tag) || "ERROR".equals(tag) || "CRASH".equals(tag)
-                      || "APP-EXIT".equals(tag) || "SERIALIZER".equals(tag) || "ACTIVITY".equals(tag);
+                      || "CRASH-GUARD".equals(tag) || "APP-EXIT".equals(tag) || "BYPASS".equals(tag)
+                      || "ACTIVITY".equals(tag);
                   if (count > 3 && !isCritical) {
                       return;
                   }
@@ -273,7 +274,7 @@ jobs:
 
                               TextView badge = new TextView(activity);
                               badge.setTag("hs_rider_log_badge");
-                              badge.setText("HS Log");
+                              badge.setText("HS Log v2.3");
                               badge.setTextColor(Color.WHITE);
                               badge.setTextSize(12f);
                               badge.setPadding(28, 16, 28, 16);
@@ -318,7 +319,7 @@ jobs:
                       scroll.addView(tv);
 
                       new AlertDialog.Builder(activity)
-                          .setTitle("HS Rider v2.2 Diagnostic Log")
+                          .setTitle("HS Rider v2.3 Diagnostic Log")
                           .setView(scroll)
                           .setPositiveButton("Copy Log", (d, w) -> {
                               ClipboardManager cm = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -347,6 +348,7 @@ jobs:
           package i2;
 
           import de.robv.android.xposed.XC_MethodHook;
+          import java.lang.reflect.Method;
 
           public final class a extends XC_MethodHook {
               public final int f1994a;
@@ -359,10 +361,28 @@ jobs:
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
                   switch (this.f1994a) {
-                      case 0:
-                          c.log("SERIALIZER", "Blocked " + methodHookParam.method.getDeclaringClass().getName()
-                              + "." + methodHookParam.method.getName() + "() -> null | caller=" + c.getCallerInfo());
-                          methodHookParam.setResult(null);
+                      case 0: // Smart Integrity / Serializer / Coroutine Bypass
+                          String clsName = methodHookParam.method.getDeclaringClass().getName();
+                          String mthName = methodHookParam.method.getName();
+                          Class<?> retType = (methodHookParam.method instanceof Method)
+                              ? ((Method) methodHookParam.method).getReturnType()
+                              : Object.class;
+                          Object fakeResult = null;
+                          if (retType == boolean.class || retType == Boolean.class) {
+                              fakeResult = Boolean.FALSE;
+                          } else if (retType == int.class || retType == Integer.class) {
+                              fakeResult = 0;
+                          } else if ("invokeSuspend".equals(mthName) || (retType != null && "kotlin.Unit".equals(retType.getName()))) {
+                              try {
+                                  Class<?> unitCls = methodHookParam.method.getDeclaringClass().getClassLoader().loadClass("kotlin.Unit");
+                                  fakeResult = unitCls.getDeclaredField("INSTANCE").get(null);
+                              } catch (Throwable ignored) {
+                              }
+                          }
+                          c.log("BYPASS", "Neutralized " + clsName + "." + mthName
+                              + "() [ret=" + (retType != null ? retType.getSimpleName() : "void")
+                              + "] -> " + fakeResult + " | caller=" + c.getCallerInfo());
+                          methodHookParam.setResult(fakeResult);
                           return;
                       case 2:
                           c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
@@ -370,8 +390,8 @@ jobs:
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
                       case 3:
-                          c.log("ROOTBEER", "Bypassed RootBeer method " + methodHookParam.method.getName()
-                              + "() -> false | caller=" + c.getCallerInfo());
+                          c.log("ROOT-BYPASS", "Bypassed root check " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName() + "() -> false | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
                       default:
@@ -421,6 +441,7 @@ jobs:
               public static volatile String sFingerprint;
               public static volatile String sAndroidId;
               private static volatile boolean sSpoofLogged = false;
+              private static final String NL = String.valueOf((char) 10);
 
               private static final Set<String> HIDDEN_PKGS = new HashSet<>(Arrays.asList(
                   "com.logistics.rider.lsposed",
@@ -619,24 +640,26 @@ jobs:
                           if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
                               String prop = (String) methodHookParam.args[0];
                               String spoofed = null;
-                              if ("ro.product.brand".equals(prop)) spoofed = sBrand;
-                              else if ("ro.product.manufacturer".equals(prop)) spoofed = sManufacturer;
-                              else if ("ro.product.model".equals(prop)) spoofed = sModel;
-                              else if ("ro.product.device".equals(prop)) spoofed = sDevice;
+                              if ("ro.product.brand".equals(prop) || "ro.product.system.brand".equals(prop)) spoofed = sBrand;
+                              else if ("ro.product.manufacturer".equals(prop) || "ro.product.system.manufacturer".equals(prop)) spoofed = sManufacturer;
+                              else if ("ro.product.model".equals(prop) || "ro.product.system.model".equals(prop)) spoofed = sModel;
+                              else if ("ro.product.device".equals(prop) || "ro.product.system.device".equals(prop)) spoofed = sDevice;
                               else if ("ro.product.board".equals(prop)) spoofed = sBoard;
-                              else if ("ro.product.name".equals(prop)) spoofed = sProduct;
-                              else if ("ro.bootloader".equals(prop)) spoofed = sBootloader;
-                              else if ("ro.build.fingerprint".equals(prop)) spoofed = sFingerprint;
-                              else if ("ro.build.tags".equals(prop)) spoofed = "release-keys";
-                              else if ("ro.build.type".equals(prop)) spoofed = "user";
+                              else if ("ro.product.name".equals(prop) || "ro.product.system.name".equals(prop)) spoofed = sProduct;
+                              else if ("ro.bootloader".equals(prop) || "ro.boot.bootloader".equals(prop)) spoofed = sBootloader;
+                              else if ("ro.build.fingerprint".equals(prop) || "ro.system.build.fingerprint".equals(prop) || "ro.bootimage.build.fingerprint".equals(prop)) spoofed = sFingerprint;
+                              else if ("ro.build.tags".equals(prop) || "ro.system.build.tags".equals(prop)) spoofed = "release-keys";
+                              else if ("ro.build.type".equals(prop) || "ro.system.build.type".equals(prop)) spoofed = "user";
                               else if ("ro.debuggable".equals(prop)) spoofed = "0";
                               else if ("ro.secure".equals(prop)) spoofed = "1";
+                              else if ("ro.boot.verifiedbootstate".equals(prop)) spoofed = "green";
+                              else if ("ro.boot.flash.locked".equals(prop)) spoofed = "1";
+                              else if ("ro.boot.vbmeta.device_state".equals(prop)) spoofed = "locked";
+                              else if ("ro.build.selinux".equals(prop)) spoofed = "1";
 
                               if (spoofed != null) {
                                   c.log("SYSPROP", "SystemProperties.get(" + prop + ") -> " + spoofed + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(spoofed);
-                              } else if (prop.startsWith("ro.") || prop.contains("qemu") || prop.contains("root") || prop.contains("xposed")) {
-                                  c.log("SYSPROP-QUERY", "App queried prop: " + prop + " | caller=" + c.getCallerInfo());
                               }
                           }
                           return;
@@ -661,26 +684,77 @@ jobs:
                               }
                           }
                           return;
-                      case 8: // Runtime.exec(String) / Runtime.exec(String[])
+                      case 8: // Runtime.exec(String / String[]) - Spoof shell probes for Incognia & Roadrunner
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
-                              String cmdStr;
-                              if (methodHookParam.args[0] instanceof String[]) {
-                                  cmdStr = Arrays.toString((String[]) methodHookParam.args[0]);
-                              } else {
-                                  cmdStr = String.valueOf(methodHookParam.args[0]);
-                              }
-                              if (cmdStr.contains("su") || cmdStr.contains("which") || cmdStr.contains("magisk")
-                                      || cmdStr.contains("busybox") || cmdStr.contains("mount")) {
-                                  c.log("EXEC-BLOCK", "Blocked Runtime.exec(" + cmdStr + ") | caller=" + c.getCallerInfo());
+                              boolean isArray = methodHookParam.args[0] instanceof String[];
+                              String cmdStr = isArray ? Arrays.toString((String[]) methodHookParam.args[0]) : String.valueOf(methodHookParam.args[0]);
+                              String envStr = (methodHookParam.args.length > 1 && methodHookParam.args[1] instanceof String[])
+                                  ? Arrays.toString((String[]) methodHookParam.args[1]) : "";
+                              String combined = cmdStr + " " + envStr;
+
+                              if (combined.contains("which") || combined.endsWith(" su") || combined.contains(", su]")) {
+                                  c.log("EXEC-BLOCK", "Blocked su/which exec: " + cmdStr + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setThrowable(new IOException("Permission denied"));
-                              } else {
-                                  c.log("EXEC-RUN", "App executed cmd: " + cmdStr + " | caller=" + c.getCallerInfo());
+                                  return;
+                              }
+
+                              String fakeOutput = null;
+                              if (combined.contains("ro.secure") || combined.contains("Z2V0cHJvcCByby5zZWN1cmUK")) {
+                                  fakeOutput = "1";
+                              } else if (combined.contains("mount") || combined.contains("bW91bnQK")) {
+                                  fakeOutput = "/dev/block/dm-0 on / type ext4 (ro,seclabel,relatime)";
+                              } else if (combined.contains("/proc/") || combined.contains("ps ")) {
+                                  fakeOutput = "total 0";
+                              } else if (combined.contains("getprop") && !combined.contains("BRAZE") && !combined.contains("APPBOY")) {
+                                  fakeOutput = "[ro.build.tags]: [release-keys]" + NL
+                                      + "[ro.build.type]: [user]" + NL
+                                      + "[ro.debuggable]: [0]" + NL
+                                      + "[ro.secure]: [1]" + NL
+                                      + "[ro.boot.verifiedbootstate]: [green]" + NL
+                                      + "[ro.boot.flash.locked]: [1]" + NL
+                                      + "[ro.product.brand]: [" + sBrand + "]" + NL
+                                      + "[ro.product.model]: [" + sModel + "]" + NL
+                                      + "[ro.build.fingerprint]: [" + sFingerprint + "]";
+                              } else if (combined.contains("RANDOM_VAR")) {
+                                  fakeOutput = "1";
+                              }
+
+                              if (fakeOutput != null) {
+                                  c.log("EXEC-SPOOF", "Spoofed shell cmd: " + cmdStr + " | caller=" + c.getCallerInfo());
+                                  if (isArray) {
+                                      methodHookParam.args[0] = new String[]{"/system/bin/echo", fakeOutput};
+                                  } else {
+                                      methodHookParam.args[0] = "/system/bin/echo " + fakeOutput.replace(NL, " ");
+                                  }
+                                  if (methodHookParam.args.length > 1) {
+                                      methodHookParam.args[1] = null;
+                                  }
                               }
                           }
                           return;
-                      case 9: // UncaughtExceptionHandler / ThreadGroup.uncaughtException
+                      case 9: // ThreadGroup.uncaughtException - Log crash AND suppress verifyRootIntegrity / security crashes!
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof Throwable) {
                               Throwable t = (Throwable) methodHookParam.args[1];
+                              boolean isIntegrityCrash = false;
+                              StackTraceElement[] stack = t.getStackTrace();
+                              if (stack != null) {
+                                  for (StackTraceElement el : stack) {
+                                      String cn = el.getClassName();
+                                      if (cn.contains("verifyRootIntegrity") || cn.contains("RiderSupportFeaturesImpl")
+                                              || cn.contains("setFontWeight") || cn.contains("setLocaleList")
+                                              || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
+                                              || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
+                                          isIntegrityCrash = true;
+                                          break;
+                                      }
+                                  }
+                              }
+                              if (isIntegrityCrash) {
+                                  c.log("CRASH-GUARD", "Intercepted & suppressed root-integrity crash on thread "
+                                      + ((Thread) methodHookParam.args[0]).getName() + " (" + t.getClass().getSimpleName() + ") - App kept alive!");
+                                  methodHookParam.setResult(null);
+                                  return;
+                              }
                               c.logError("CRASH", t);
                           }
                           return;
@@ -731,6 +805,18 @@ jobs:
           public final class XposedInit implements IXposedHookLoadPackage {
               private static final String TARGET_PKG = "com.logistics.rider.hungerstation";
 
+              private void hookAllIfPresent(ClassLoader cl, String className, String methodName, int hookType) {
+                  try {
+                      Class<?> cls = XposedHelpers.findClassIfExists(className, cl);
+                      if (cls != null) {
+                          XposedBridge.hookAllMethods(cls, methodName, new a(hookType));
+                          c.log("HOOK-OK", "Hooked " + className + "." + methodName);
+                      }
+                  } catch (Throwable t) {
+                      c.logError("Hook_" + className, t);
+                  }
+              }
+
               @Override
               public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
                   if (lpparam == null || !TARGET_PKG.equals(lpparam.packageName)) {
@@ -739,7 +825,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v2.3 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
@@ -751,40 +837,53 @@ jobs:
                       c.logError("InitProfile", t);
                   }
 
-                  // 2. Hook UncaughtException & System.exit / Process.killProcess to catch any crash or forced exit
+                  // 2. Hook UncaughtException (Crash Guard) & Exit Detector
                   try {
                       XposedHelpers.findAndHookMethod(ThreadGroup.class, "uncaughtException", Thread.class, Throwable.class, new b(9, null));
                       XposedHelpers.findAndHookMethod(Runtime.class, "exit", int.class, new b(10, null));
                       XposedHelpers.findAndHookMethod(Process.class, "killProcess", int.class, new b(10, null));
-                      c.log("HOOK-OK", "Hooked Crash Catcher (ThreadGroup.uncaughtException) & Exit Detector");
+                      c.log("HOOK-OK", "Hooked Crash Guard & Exit Detector");
                   } catch (Throwable t) {
                       c.logError("CrashHook", t);
                   }
 
-                  // 3. Hook Application.attach(Context) and Application.onCreate()
+                  // 3. Neutralize HungerStation v4.2643.1 (1352) verifyRootIntegrity & Obfuscated Root Checkers!
+                  hookAllIfPresent(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl", "verifyRootIntegrity", 0);
+                  hookAllIfPresent(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 0);
+                  hookAllIfPresent(cl, "o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", 0);
+                  hookAllIfPresent(cl, "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds", "serializer", 0);
+                  hookAllIfPresent(cl, "o.setLocaleList", "serializer", 0);
+                  hookAllIfPresent(cl, "o.setFontWeight", "serializer", 0);
+                  hookAllIfPresent(cl, "o.ewG", "serializer", 0);
+
+                  // Neutralize RootBeer & Sentry & Incognia obfuscated helper classes discovered in 3.txt
+                  hookAllIfPresent(cl, "o.setCustomAttributeArray", "serializer", 3);
+                  hookAllIfPresent(cl, "o.setCustomAttributeArray", "write", 3);
+                  hookAllIfPresent(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 3);
+                  hookAllIfPresent(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "read", 3);
+                  hookAllIfPresent(cl, "io.sentry.android.core.internal.util.PlaybackStateCompat", "IconCompatParcelizer", 3);
+
+                  // 4. Hook Application.attach(Context) and Application.onCreate()
                   try {
                       XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new b(1, cl));
                       XposedHelpers.findAndHookMethod(Application.class, "onCreate", new b(1, cl));
-                      c.log("HOOK-OK", "Hooked Application.attach & Application.onCreate");
                   } catch (Throwable t) {
                       c.logError("ApplicationHook", t);
                   }
 
-                  // 4. Hook Activity.onResume() to attach in-app floating log viewer button safely via post()
+                  // 5. Hook Activity.onResume() to attach in-app floating log viewer button safely via post()
                   try {
                       XposedHelpers.findAndHookMethod(Activity.class, "onResume", new b(7, null));
-                      c.log("HOOK-OK", "Hooked Activity.onResume (Floating Log Badge)");
                   } catch (Throwable t) {
                       c.logError("ActivityHook", t);
                   }
 
-                  // 5. Hook Google Play Store installer verification & hide root/module packages
+                  // 6. Hook Google Play Store installer verification & hide root/module packages
                   try {
                       Class<?> pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", cl);
                       XposedHelpers.findAndHookMethod(pmClass, "getInstallerPackageName", String.class, new b(0, TARGET_PKG));
                       XposedHelpers.findAndHookMethod(pmClass, "getPackageInfo", String.class, int.class, new b(6, null));
                       XposedHelpers.findAndHookMethod(pmClass, "getApplicationInfo", String.class, int.class, new b(6, null));
-                      c.log("HOOK-OK", "Hooked ApplicationPackageManager (Installer + Package Hiding)");
                   } catch (Throwable t) {
                       c.logError("PackageManagerHook", t);
                   }
@@ -794,71 +893,46 @@ jobs:
                       XposedHelpers.findAndHookMethod(isiClass, "getInstallingPackageName", new a(1));
                       XposedHelpers.findAndHookMethod(isiClass, "getInitiatingPackageName", new a(1));
                       XposedHelpers.findAndHookMethod(isiClass, "getOriginatingPackageName", new a(1));
-                      c.log("HOOK-OK", "Hooked InstallSourceInfo (All 3 package methods)");
                   } catch (Throwable t) {
                       c.logError("InstallSourceInfoHook", t);
                   }
 
-                  // 6. Hook SystemProperties.get
+                  // 7. Hook SystemProperties.get
                   try {
                       Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", cl);
                       XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, new b(4, null));
                       XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, new b(4, null));
-                      c.log("HOOK-OK", "Hooked android.os.SystemProperties.get");
                   } catch (Throwable t) {
                       c.logError("SystemPropertiesHook", t);
                   }
 
-                  // 7. Hook ANDROID_ID & Developer Options / ADB / Mock Location flags
+                  // 8. Hook ANDROID_ID & Developer Options / ADB / Mock Location flags
                   try {
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getString", ContentResolver.class, String.class, new b(2, null));
                       XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, int.class, new b(3, null));
                       XposedHelpers.findAndHookMethod(Settings.Secure.class, "getInt", ContentResolver.class, String.class, new b(3, null));
-                      c.log("HOOK-OK", "Hooked Settings.Secure & Settings.Global");
                   } catch (Throwable t) {
                       c.logError("SettingsHook", t);
                   }
 
-                  // 8. Hook Mock Location detection on Location objects
+                  // 9. Hook Mock Location detection on Location objects
                   try {
                       XposedHelpers.findAndHookMethod(Location.class, "isFromMockProvider", new a(2));
                       if (Build.VERSION.SDK_INT >= 31) {
                           XposedHelpers.findAndHookMethod(Location.class, "isMock", new a(2));
                       }
-                      c.log("HOOK-OK", "Hooked Location mock detection methods");
                   } catch (Throwable t) {
                       c.logError("LocationHook", t);
                   }
 
-                  // 9. Hook Root / Xposed file existence checks & Runtime.exec su/which checks
+                  // 10. Hook Root / Xposed file existence checks & Runtime.exec shell spoofing
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
                       XposedBridge.hookAllMethods(Runtime.class, "exec", new b(8, null));
-                      c.log("HOOK-OK", "Hooked File.exists & Runtime.exec root filters");
                   } catch (Throwable t) {
                       c.logError("FileExecHook", t);
-                  }
-
-                  // 10. Hook RootBeer / Native Root Checker if present
-                  try {
-                      Class<?> rbClass = XposedHelpers.findClassIfExists("com.scottyab.rootbeer.RootBeer", cl);
-                      if (rbClass != null) {
-                          XposedHelpers.findAndHookMethod(rbClass, "isRooted", new a(3));
-                          XposedHelpers.findAndHookMethod(rbClass, "isRootedWithoutBusyBoxCheck", new a(3));
-                          XposedHelpers.findAndHookMethod(rbClass, "checkForRootNative", new a(3));
-                          XposedHelpers.findAndHookMethod(rbClass, "checkSuExists", new a(3));
-                          XposedHelpers.findAndHookMethod(rbClass, "checkForRWPaths", new a(3));
-                          XposedHelpers.findAndHookMethod(rbClass, "checkForDangerousProps", new a(3));
-                          c.log("HOOK-OK", "Found & hooked com.scottyab.rootbeer.RootBeer!");
-                      }
-                      Class<?> rbNative = XposedHelpers.findClassIfExists("com.scottyab.rootbeer.util.QLog", cl);
-                      if (rbNative != null) {
-                          c.log("CLASS-CHECK", "RootBeer QLog present in APK");
-                      }
-                  } catch (Throwable t) {
-                      c.logError("RootBeerHook", t);
                   }
               }
           }
@@ -922,7 +996,7 @@ jobs:
                       }
                   } catch (Throwable ignored) {
                   }
-                  return "No logs received yet." + NL + "1. Enable module in LSPosed for HungerStation." + NL + "2. Open HungerStation and tap the floating [HS Log] button at the top-left.";
+                  return "No logs received yet." + NL + "1. Enable module in LSPosed for HungerStation." + NL + "2. Open HungerStation and tap the floating [HS Log v2.3] button at the top-left.";
               }
 
               public static void clearLogs(Context ctx) {
@@ -1094,7 +1168,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Rider v2.2 - Diagnostic &amp; Spoofer"
+                  android:text="HS Rider v2.3 - Integrity &amp; Spoofer"
                   android:textSize="20sp"
                   android:textStyle="bold"
                   android:gravity="center"
@@ -1206,7 +1280,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Rider v2.2</string>
+              <string name="app_name">HS Rider v2.3</string>
           </resources>
           EOF
 
@@ -1250,7 +1324,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Rider Killer v2.2 (Crash Fix &amp; Deep Diagnostic Logger)" />
+                      android:value="HS Rider Killer v2.3 (VerifyRootIntegrity + Incognia Bypass)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -1319,8 +1393,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 4
-                  versionName "2.2"
+                  versionCode 5
+                  versionName "2.3"
               }
 
               signingConfigs {
@@ -1361,12 +1435,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.2.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.3.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Rider-v2.2-APK
-          path: output/HS-Rider-v2.2.apk
+          name: HS-Rider-v2.3-APK
+          path: output/HS-Rider-v2.3.apk
           if-no-files-found: error
