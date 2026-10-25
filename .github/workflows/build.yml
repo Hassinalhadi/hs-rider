@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Signed HS Rider v2.3 (VerifyRootIntegrity + Incognia Bypass)
+    name: Build Signed HS Rider v2.4 (Standalone Two-Tab UI + VerifyRootIntegrity Fix)
     runs-on: ubuntu-latest
 
     steps:
@@ -22,7 +22,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Rider v2.3 Sources
+      - name: Clean Legacy Artifacts & Inject HS Rider v2.4 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -87,23 +87,11 @@ jobs:
           cat << 'EOF' > app/src/main/java/i2/c.java
           package i2;
 
-          import android.app.Activity;
-          import android.app.AlertDialog;
-          import android.content.ClipData;
-          import android.content.ClipboardManager;
           import android.content.Context;
-          import android.graphics.Color;
-          import android.graphics.drawable.GradientDrawable;
           import android.net.Uri;
+          import android.os.Bundle;
           import android.os.Environment;
           import android.util.Log;
-          import android.view.Gravity;
-          import android.view.View;
-          import android.view.ViewGroup;
-          import android.widget.FrameLayout;
-          import android.widget.ScrollView;
-          import android.widget.TextView;
-          import android.widget.Toast;
           import de.robv.android.xposed.XposedBridge;
           import java.io.File;
           import java.io.FileOutputStream;
@@ -117,16 +105,33 @@ jobs:
 
           public final class c {
               private static final List<String> sBuffer = new ArrayList<>();
+              private static final List<String> sPendingProviderLines = new ArrayList<>();
               private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
               private static volatile Context sTargetContext;
-              private static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
+              public static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
               private static final String NL = String.valueOf((char) 10);
 
               public static void setTargetContext(Context ctx) {
                   if (ctx != null && sTargetContext == null) {
                       sTargetContext = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
-                      flushBufferToProvider();
                   }
+                  if (sTargetContext != null) {
+                      flushPendingToProvider();
+                  }
+              }
+
+              private static Context resolveAnyContext() {
+                  if (sTargetContext != null) return sTargetContext;
+                  try {
+                      Class<?> atClass = Class.forName("android.app.ActivityThread");
+                      Object app = atClass.getMethod("currentApplication").invoke(null);
+                      if (app instanceof Context) {
+                          sTargetContext = (Context) app;
+                          return sTargetContext;
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return null;
               }
 
               public static synchronized void log(String tag, String msg) {
@@ -135,7 +140,7 @@ jobs:
                   sEventCounts.put(key, count);
                   boolean isCritical = "INIT".equals(tag) || "ERROR".equals(tag) || "CRASH".equals(tag)
                       || "CRASH-GUARD".equals(tag) || "APP-EXIT".equals(tag) || "BYPASS".equals(tag)
-                      || "ACTIVITY".equals(tag);
+                      || "ACTIVITY".equals(tag) || "SPOOF".equals(tag);
                   if (count > 3 && !isCritical) {
                       return;
                   }
@@ -145,6 +150,8 @@ jobs:
                       sBuffer.remove(0);
                   }
                   sBuffer.add(line);
+                  sPendingProviderLines.add(line);
+
                   try {
                       XposedBridge.log("HS-Rider-Log: " + line);
                   } catch (Throwable ignored) {
@@ -153,7 +160,8 @@ jobs:
                       Log.d("HS-Rider-Log", line);
                   } catch (Throwable ignored) {
                   }
-                  sendLineToProvider(line);
+
+                  flushPendingToProvider();
                   appendToExternalFile(line);
               }
 
@@ -202,34 +210,31 @@ jobs:
                       if (found > 0) callers.append(" <- ");
                       callers.append(cls).append(".").append(mth).append(":").append(el.getLineNumber());
                       found++;
-                      if (found >= 6) break;
+                      if (found >= 5) break;
                   }
                   return callers.length() > 0 ? callers.toString() : "system/native";
               }
 
-              private static void flushBufferToProvider() {
-                  if (sTargetContext == null) return;
-                  List<String> snapshot;
-                  synchronized (c.class) {
-                      snapshot = new ArrayList<>(sBuffer);
-                  }
-                  for (String line : snapshot) {
-                      sendLineToProvider(line);
-                  }
-              }
-
-              private static void sendLineToProvider(String line) {
-                  Context ctx = sTargetContext;
-                  if (ctx == null) return;
+              private static synchronized void flushPendingToProvider() {
+                  Context ctx = resolveAnyContext();
+                  if (ctx == null || sPendingProviderLines.isEmpty()) return;
                   try {
-                      ctx.getContentResolver().call(LOG_PROVIDER_URI, "log", line, null);
+                      StringBuilder batch = new StringBuilder();
+                      for (int i = 0; i < sPendingProviderLines.size(); i++) {
+                          if (i > 0) batch.append(NL);
+                          batch.append(sPendingProviderLines.get(i));
+                      }
+                      Bundle res = ctx.getContentResolver().call(LOG_PROVIDER_URI, "log", batch.toString(), null);
+                      if (res != null) {
+                          sPendingProviderLines.clear();
+                      }
                   } catch (Throwable ignored) {
                   }
               }
 
               private static void appendToExternalFile(String line) {
                   try {
-                      Context ctx = sTargetContext;
+                      Context ctx = resolveAnyContext();
                       if (ctx != null) {
                           File extDir = ctx.getExternalFilesDir(null);
                           if (extDir != null) {
@@ -249,98 +254,6 @@ jobs:
                   } catch (Throwable ignored) {
                   }
               }
-
-              public static synchronized String getAllLogsText() {
-                  if (sBuffer.isEmpty()) {
-                      return "No logs captured yet.";
-                  }
-                  StringBuilder sb = new StringBuilder();
-                  for (String line : sBuffer) {
-                      sb.append(line).append(NL);
-                  }
-                  return sb.toString();
-              }
-
-              public static void attachFloatingBadge(final Activity activity) {
-                  if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
-                  try {
-                      final View decor = activity.getWindow() != null ? activity.getWindow().getDecorView() : null;
-                      if (!(decor instanceof ViewGroup)) return;
-                      decor.post(() -> {
-                          try {
-                              if (activity.isFinishing() || activity.isDestroyed()) return;
-                              ViewGroup root = (ViewGroup) decor;
-                              if (root.findViewWithTag("hs_rider_log_badge") != null) return;
-
-                              TextView badge = new TextView(activity);
-                              badge.setTag("hs_rider_log_badge");
-                              badge.setText("HS Log v2.3");
-                              badge.setTextColor(Color.WHITE);
-                              badge.setTextSize(12f);
-                              badge.setPadding(28, 16, 28, 16);
-
-                              GradientDrawable bg = new GradientDrawable();
-                              bg.setColor(Color.parseColor("#CC1E88E5"));
-                              bg.setCornerRadius(40f);
-                              bg.setStroke(2, Color.WHITE);
-                              badge.setBackground(bg);
-
-                              FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                                  ViewGroup.LayoutParams.WRAP_CONTENT,
-                                  ViewGroup.LayoutParams.WRAP_CONTENT,
-                                  Gravity.TOP | Gravity.START
-                              );
-                              lp.topMargin = 140;
-                              lp.leftMargin = 24;
-                              badge.setElevation(100f);
-
-                              badge.setOnClickListener(v -> showInAppLogDialog(activity));
-                              root.addView(badge, lp);
-                          } catch (Throwable t) {
-                              logError("attachFloatingBadgePost", t);
-                          }
-                      });
-                  } catch (Throwable t) {
-                      logError("attachFloatingBadge", t);
-                  }
-              }
-
-              private static void showInAppLogDialog(final Activity activity) {
-                  try {
-                      final String logs = getAllLogsText();
-                      ScrollView scroll = new ScrollView(activity);
-                      TextView tv = new TextView(activity);
-                      tv.setText(logs);
-                      tv.setTextSize(11f);
-                      tv.setTextColor(Color.parseColor("#00E676"));
-                      tv.setBackgroundColor(Color.parseColor("#121212"));
-                      tv.setPadding(32, 32, 32, 32);
-                      tv.setTextIsSelectable(true);
-                      scroll.addView(tv);
-
-                      new AlertDialog.Builder(activity)
-                          .setTitle("HS Rider v2.3 Diagnostic Log")
-                          .setView(scroll)
-                          .setPositiveButton("Copy Log", (d, w) -> {
-                              ClipboardManager cm = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-                              if (cm != null) {
-                                  cm.setPrimaryClip(ClipData.newPlainText("HS_Rider_Log", logs));
-                                  Toast.makeText(activity, "Copied to clipboard!", Toast.LENGTH_SHORT).show();
-                              }
-                          })
-                          .setNeutralButton("Clear", (d, w) -> {
-                              synchronized (c.class) {
-                                  sBuffer.clear();
-                                  sEventCounts.clear();
-                              }
-                              Toast.makeText(activity, "Logs cleared", Toast.LENGTH_SHORT).show();
-                          })
-                          .setNegativeButton("Close", null)
-                          .show();
-                  } catch (Throwable t) {
-                      logError("showInAppLogDialog", t);
-                  }
-              }
           }
           EOF
 
@@ -348,7 +261,6 @@ jobs:
           package i2;
 
           import de.robv.android.xposed.XC_MethodHook;
-          import java.lang.reflect.Method;
 
           public final class a extends XC_MethodHook {
               public final int f1994a;
@@ -361,40 +273,26 @@ jobs:
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
                   switch (this.f1994a) {
-                      case 0: // Smart Integrity / Serializer / Coroutine Bypass
-                          String clsName = methodHookParam.method.getDeclaringClass().getName();
-                          String mthName = methodHookParam.method.getName();
-                          Class<?> retType = (methodHookParam.method instanceof Method)
-                              ? ((Method) methodHookParam.method).getReturnType()
-                              : Object.class;
-                          Object fakeResult = null;
-                          if (retType == boolean.class || retType == Boolean.class) {
-                              fakeResult = Boolean.FALSE;
-                          } else if (retType == int.class || retType == Integer.class) {
-                              fakeResult = 0;
-                          } else if ("invokeSuspend".equals(mthName) || (retType != null && "kotlin.Unit".equals(retType.getName()))) {
-                              try {
-                                  Class<?> unitCls = methodHookParam.method.getDeclaringClass().getClassLoader().loadClass("kotlin.Unit");
-                                  fakeResult = unitCls.getDeclaredField("INSTANCE").get(null);
-                              } catch (Throwable ignored) {
-                              }
-                          }
-                          c.log("BYPASS", "Neutralized " + clsName + "." + mthName
-                              + "() [ret=" + (retType != null ? retType.getSimpleName() : "void")
-                              + "] -> " + fakeResult + " | caller=" + c.getCallerInfo());
-                          methodHookParam.setResult(fakeResult);
+                      case 0: // RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend(Object)
+                          if (!b.sOptIntegrityBypass) return;
+                          Object unitInstance = (methodHookParam.args != null && methodHookParam.args.length > 0)
+                              ? methodHookParam.args[0] : null;
+                          c.log("BYPASS", "Bypassed verifyRootIntegrity$1.invokeSuspend -> returned Unit.INSTANCE safely");
+                          methodHookParam.setResult(unitInstance);
                           return;
-                      case 2:
+                      case 2: // Location.isMock / isFromMockProvider
+                          if (!b.sOptMockHide) return;
                           c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
                               + "() -> false | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
-                      case 3:
-                          c.log("ROOT-BYPASS", "Bypassed root check " + methodHookParam.method.getDeclaringClass().getName()
-                              + "." + methodHookParam.method.getName() + "() -> false | caller=" + c.getCallerInfo());
+                      case 3: // RootBeer direct boolean methods
+                          if (!b.sOptRootHide) return;
+                          c.log("ROOT-BYPASS", "Bypassed RootBeer " + methodHookParam.method.getName() + "() -> false");
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
-                      default:
+                      default: // InstallSourceInfo methods
+                          if (!b.sOptInstallerSpoof) return;
                           c.log("INSTALLER", "Spoofed " + methodHookParam.method.getName()
                               + "() -> com.android.vending | caller=" + c.getCallerInfo());
                           methodHookParam.setResult("com.android.vending");
@@ -413,6 +311,7 @@ jobs:
           import android.content.pm.PackageInfo;
           import android.content.pm.PackageManager;
           import android.os.Build;
+          import android.os.Bundle;
           import de.robv.android.xposed.XC_MethodHook;
           import de.robv.android.xposed.XSharedPreferences;
           import de.robv.android.xposed.XposedHelpers;
@@ -440,11 +339,19 @@ jobs:
               public static volatile String sBootloader;
               public static volatile String sFingerprint;
               public static volatile String sAndroidId;
-              private static volatile boolean sSpoofLogged = false;
-              private static final String NL = String.valueOf((char) 10);
 
+              public static volatile boolean sOptMaster = true;
+              public static volatile boolean sOptIntegrityBypass = true;
+              public static volatile boolean sOptDeviceSpoof = true;
+              public static volatile boolean sOptAndroidId = true;
+              public static volatile boolean sOptInstallerSpoof = true;
+              public static volatile boolean sOptRootHide = true;
+              public static volatile boolean sOptMockHide = true;
+
+              private static volatile boolean sSpoofLogged = false;
+
+              // Note: com.logistics.rider.lsposed is intentionally NOT blocked here so ContentResolver can reach LogProvider!
               private static final Set<String> HIDDEN_PKGS = new HashSet<>(Arrays.asList(
-                  "com.logistics.rider.lsposed",
                   "com.topjohnwu.magisk",
                   "io.github.vvb2060.magisk",
                   "org.lsposed.manager",
@@ -478,14 +385,48 @@ jobs:
                   return sb.toString();
               }
 
-              public static synchronized void initConsistentProfile(String dataDir, ClassLoader cl) {
-                  if (sBrand != null) {
-                      applyBuildSpoof(cl);
-                      return;
+              public static void loadConfigFromProvider(Context ctx) {
+                  if (ctx == null) return;
+                  try {
+                      Bundle cfg = ctx.getContentResolver().call(c.LOG_PROVIDER_URI, "get_config", null, null);
+                      if (cfg != null && cfg.containsKey("brand")) {
+                          sOptMaster = cfg.getBoolean("opt_master", true);
+                          sOptIntegrityBypass = cfg.getBoolean("opt_integrity", true);
+                          sOptDeviceSpoof = cfg.getBoolean("opt_device", true);
+                          sOptAndroidId = cfg.getBoolean("opt_android_id", true);
+                          sOptInstallerSpoof = cfg.getBoolean("opt_installer", true);
+                          sOptRootHide = cfg.getBoolean("opt_root", true);
+                          sOptMockHide = cfg.getBoolean("opt_mock", true);
+
+                          String b = cfg.getString("brand", null);
+                          if (b != null && !b.isEmpty()) {
+                              sBrand = b;
+                              sManufacturer = cfg.getString("manufacturer", sManufacturer);
+                              sModel = cfg.getString("model", sModel);
+                              sDevice = cfg.getString("device", sDevice);
+                              sBoard = cfg.getString("board", sBoard);
+                              sProduct = cfg.getString("product", sProduct);
+                              sBootloader = cfg.getString("bootloader", sBootloader);
+                              sFingerprint = cfg.getString("fingerprint", sFingerprint);
+                              sAndroidId = cfg.getString("android_id", sAndroidId);
+                          }
+                      }
+                  } catch (Throwable ignored) {
                   }
+              }
+
+              public static synchronized void initConsistentProfile(String dataDir, ClassLoader cl) {
                   try {
                       XSharedPreferences xprefs = new XSharedPreferences("com.logistics.rider.lsposed", "com.logistics.rider.settings");
                       xprefs.reload();
+                      sOptMaster = xprefs.getBoolean("opt_master", sOptMaster);
+                      sOptIntegrityBypass = xprefs.getBoolean("opt_integrity", sOptIntegrityBypass);
+                      sOptDeviceSpoof = xprefs.getBoolean("opt_device", sOptDeviceSpoof);
+                      sOptAndroidId = xprefs.getBoolean("opt_android_id", sOptAndroidId);
+                      sOptInstallerSpoof = xprefs.getBoolean("opt_installer", sOptInstallerSpoof);
+                      sOptRootHide = xprefs.getBoolean("opt_root", sOptRootHide);
+                      sOptMockHide = xprefs.getBoolean("opt_mock", sOptMockHide);
+
                       String xb = xprefs.getString("brand", null);
                       if (xb != null && !xb.isEmpty()) {
                           sBrand = xb;
@@ -497,7 +438,6 @@ jobs:
                           sBootloader = xprefs.getString("bootloader", "");
                           sFingerprint = xprefs.getString("fingerprint", "");
                           sAndroidId = xprefs.getString("android_id", generateRandomHex(16));
-                          c.log("PREFS", "Loaded profile from XSharedPreferences: " + sModel);
                       }
                   } catch (Throwable ignored) {
                   }
@@ -561,11 +501,13 @@ jobs:
                       sAndroidId = generateRandomHex(16);
                   }
 
-                  applyBuildSpoof(cl);
+                  if (sOptMaster && sOptDeviceSpoof) {
+                      applyBuildSpoof(cl);
+                  }
               }
 
               public static void applyBuildSpoof(ClassLoader cl) {
-                  if (sBrand == null) return;
+                  if (sBrand == null || !sOptMaster || !sOptDeviceSpoof) return;
                   try {
                       Class<?> buildClass = cl != null ? cl.loadClass("android.os.Build") : Build.class;
                       XposedHelpers.setStaticObjectField(buildClass, "BRAND", sBrand);
@@ -590,9 +532,10 @@ jobs:
 
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
-                  if (methodHookParam == null) return;
+                  if (methodHookParam == null || !sOptMaster) return;
                   switch (this.f1995a) {
                       case 0: // getInstallerPackageName
+                          if (!sOptInstallerSpoof) return;
                           if (methodHookParam.args.length > 0 && Objects.equals(methodHookParam.args[0], this.f1996b)) {
                               c.log("INSTALLER", "getInstallerPackageName -> com.android.vending | caller=" + c.getCallerInfo());
                               methodHookParam.setResult("com.android.vending");
@@ -608,6 +551,7 @@ jobs:
                           }
                           if (ctx != null) {
                               c.setTargetContext(ctx);
+                              loadConfigFromProvider(ctx);
                               try {
                                   PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
                                   c.log("APP-INFO", "HungerStation versionName=" + pi.versionName + " versionCode=" + pi.getLongVersionCode());
@@ -620,6 +564,7 @@ jobs:
                           }
                           return;
                       case 2: // Settings.Secure.getString(android_id)
+                          if (!sOptAndroidId) return;
                           if (methodHookParam.args.length >= 2 && "android_id".equals(methodHookParam.args[1])) {
                               if (sAndroidId != null) {
                                   c.log("ANDROID_ID", "Settings.Secure.getString(android_id) -> " + sAndroidId + " | caller=" + c.getCallerInfo());
@@ -628,6 +573,7 @@ jobs:
                           }
                           return;
                       case 3: // Settings.Global/Secure.getInt (ADB / DevOptions / MockLocation)
+                          if (!sOptMockHide) return;
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof String) {
                               String key = (String) methodHookParam.args[1];
                               if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
@@ -637,25 +583,24 @@ jobs:
                           }
                           return;
                       case 4: // SystemProperties.get
+                          if (!sOptDeviceSpoof) return;
                           if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
                               String prop = (String) methodHookParam.args[0];
                               String spoofed = null;
-                              if ("ro.product.brand".equals(prop) || "ro.product.system.brand".equals(prop)) spoofed = sBrand;
-                              else if ("ro.product.manufacturer".equals(prop) || "ro.product.system.manufacturer".equals(prop)) spoofed = sManufacturer;
-                              else if ("ro.product.model".equals(prop) || "ro.product.system.model".equals(prop)) spoofed = sModel;
-                              else if ("ro.product.device".equals(prop) || "ro.product.system.device".equals(prop)) spoofed = sDevice;
+                              if ("ro.product.brand".equals(prop)) spoofed = sBrand;
+                              else if ("ro.product.manufacturer".equals(prop)) spoofed = sManufacturer;
+                              else if ("ro.product.model".equals(prop)) spoofed = sModel;
+                              else if ("ro.product.device".equals(prop)) spoofed = sDevice;
                               else if ("ro.product.board".equals(prop)) spoofed = sBoard;
-                              else if ("ro.product.name".equals(prop) || "ro.product.system.name".equals(prop)) spoofed = sProduct;
-                              else if ("ro.bootloader".equals(prop) || "ro.boot.bootloader".equals(prop)) spoofed = sBootloader;
-                              else if ("ro.build.fingerprint".equals(prop) || "ro.system.build.fingerprint".equals(prop) || "ro.bootimage.build.fingerprint".equals(prop)) spoofed = sFingerprint;
-                              else if ("ro.build.tags".equals(prop) || "ro.system.build.tags".equals(prop)) spoofed = "release-keys";
-                              else if ("ro.build.type".equals(prop) || "ro.system.build.type".equals(prop)) spoofed = "user";
+                              else if ("ro.product.name".equals(prop)) spoofed = sProduct;
+                              else if ("ro.bootloader".equals(prop)) spoofed = sBootloader;
+                              else if ("ro.build.fingerprint".equals(prop)) spoofed = sFingerprint;
+                              else if ("ro.build.tags".equals(prop)) spoofed = "release-keys";
+                              else if ("ro.build.type".equals(prop)) spoofed = "user";
                               else if ("ro.debuggable".equals(prop)) spoofed = "0";
                               else if ("ro.secure".equals(prop)) spoofed = "1";
                               else if ("ro.boot.verifiedbootstate".equals(prop)) spoofed = "green";
                               else if ("ro.boot.flash.locked".equals(prop)) spoofed = "1";
-                              else if ("ro.boot.vbmeta.device_state".equals(prop)) spoofed = "locked";
-                              else if ("ro.build.selinux".equals(prop)) spoofed = "1";
 
                               if (spoofed != null) {
                                   c.log("SYSPROP", "SystemProperties.get(" + prop + ") -> " + spoofed + " | caller=" + c.getCallerInfo());
@@ -664,6 +609,7 @@ jobs:
                           }
                           return;
                       case 5: // File.exists
+                          if (!sOptRootHide) return;
                           if (methodHookParam.thisObject instanceof File) {
                               String path = ((File) methodHookParam.thisObject).getAbsolutePath();
                               if (path != null && (path.endsWith("/su") || path.endsWith("/busybox")
@@ -676,6 +622,7 @@ jobs:
                           }
                           return;
                       case 6: // PackageManager.getPackageInfo / getApplicationInfo
+                          if (!sOptRootHide) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                               String pkgName = (String) methodHookParam.args[0];
                               if (HIDDEN_PKGS.contains(pkgName)) {
@@ -684,55 +631,23 @@ jobs:
                               }
                           }
                           return;
-                      case 8: // Runtime.exec(String / String[]) - Spoof shell probes for Incognia & Roadrunner
+                      case 8: // Runtime.exec(String / String[])
+                          if (!sOptRootHide) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
-                              boolean isArray = methodHookParam.args[0] instanceof String[];
-                              String cmdStr = isArray ? Arrays.toString((String[]) methodHookParam.args[0]) : String.valueOf(methodHookParam.args[0]);
-                              String envStr = (methodHookParam.args.length > 1 && methodHookParam.args[1] instanceof String[])
-                                  ? Arrays.toString((String[]) methodHookParam.args[1]) : "";
-                              String combined = cmdStr + " " + envStr;
-
-                              if (combined.contains("which") || combined.endsWith(" su") || combined.contains(", su]")) {
-                                  c.log("EXEC-BLOCK", "Blocked su/which exec: " + cmdStr + " | caller=" + c.getCallerInfo());
+                              String cmdStr;
+                              if (methodHookParam.args[0] instanceof String[]) {
+                                  cmdStr = Arrays.toString((String[]) methodHookParam.args[0]);
+                              } else {
+                                  cmdStr = String.valueOf(methodHookParam.args[0]);
+                              }
+                              if (cmdStr.contains("which") || cmdStr.endsWith(" su") || cmdStr.contains(", su]")
+                                      || cmdStr.contains("magisk") || cmdStr.contains("busybox") || cmdStr.equals("mount") || cmdStr.equals("[mount]")) {
+                                  c.log("EXEC-BLOCK", "Blocked Runtime.exec(" + cmdStr + ") | caller=" + c.getCallerInfo());
                                   methodHookParam.setThrowable(new IOException("Permission denied"));
-                                  return;
-                              }
-
-                              String fakeOutput = null;
-                              if (combined.contains("ro.secure") || combined.contains("Z2V0cHJvcCByby5zZWN1cmUK")) {
-                                  fakeOutput = "1";
-                              } else if (combined.contains("mount") || combined.contains("bW91bnQK")) {
-                                  fakeOutput = "/dev/block/dm-0 on / type ext4 (ro,seclabel,relatime)";
-                              } else if (combined.contains("/proc/") || combined.contains("ps ")) {
-                                  fakeOutput = "total 0";
-                              } else if (combined.contains("getprop") && !combined.contains("BRAZE") && !combined.contains("APPBOY")) {
-                                  fakeOutput = "[ro.build.tags]: [release-keys]" + NL
-                                      + "[ro.build.type]: [user]" + NL
-                                      + "[ro.debuggable]: [0]" + NL
-                                      + "[ro.secure]: [1]" + NL
-                                      + "[ro.boot.verifiedbootstate]: [green]" + NL
-                                      + "[ro.boot.flash.locked]: [1]" + NL
-                                      + "[ro.product.brand]: [" + sBrand + "]" + NL
-                                      + "[ro.product.model]: [" + sModel + "]" + NL
-                                      + "[ro.build.fingerprint]: [" + sFingerprint + "]";
-                              } else if (combined.contains("RANDOM_VAR")) {
-                                  fakeOutput = "1";
-                              }
-
-                              if (fakeOutput != null) {
-                                  c.log("EXEC-SPOOF", "Spoofed shell cmd: " + cmdStr + " | caller=" + c.getCallerInfo());
-                                  if (isArray) {
-                                      methodHookParam.args[0] = new String[]{"/system/bin/echo", fakeOutput};
-                                  } else {
-                                      methodHookParam.args[0] = "/system/bin/echo " + fakeOutput.replace(NL, " ");
-                                  }
-                                  if (methodHookParam.args.length > 1) {
-                                      methodHookParam.args[1] = null;
-                                  }
                               }
                           }
                           return;
-                      case 9: // ThreadGroup.uncaughtException - Log crash AND suppress verifyRootIntegrity / security crashes!
+                      case 9: // ThreadGroup.uncaughtException - Crash Guard + Crash Logger
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof Throwable) {
                               Throwable t = (Throwable) methodHookParam.args[1];
                               boolean isIntegrityCrash = false;
@@ -749,7 +664,7 @@ jobs:
                                       }
                                   }
                               }
-                              if (isIntegrityCrash) {
+                              if (isIntegrityCrash && sOptIntegrityBypass) {
                                   c.log("CRASH-GUARD", "Intercepted & suppressed root-integrity crash on thread "
                                       + ((Thread) methodHookParam.args[0]).getName() + " (" + t.getClass().getSimpleName() + ") - App kept alive!");
                                   methodHookParam.setResult(null);
@@ -770,12 +685,11 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
-                  if (this.f1995a == 7) {
+                  if (this.f1995a == 7) { // Activity.onResume - Log only, NO floating button in Rider app!
                       if (methodHookParam.thisObject instanceof Activity) {
                           Activity act = (Activity) methodHookParam.thisObject;
                           c.setTargetContext(act);
-                          c.log("ACTIVITY", "Resumed activity: " + act.getClass().getName());
-                          c.attachFloatingBadge(act);
+                          c.log("ACTIVITY", "Opened screen: " + act.getClass().getName());
                       }
                   }
               }
@@ -805,18 +719,6 @@ jobs:
           public final class XposedInit implements IXposedHookLoadPackage {
               private static final String TARGET_PKG = "com.logistics.rider.hungerstation";
 
-              private void hookAllIfPresent(ClassLoader cl, String className, String methodName, int hookType) {
-                  try {
-                      Class<?> cls = XposedHelpers.findClassIfExists(className, cl);
-                      if (cls != null) {
-                          XposedBridge.hookAllMethods(cls, methodName, new a(hookType));
-                          c.log("HOOK-OK", "Hooked " + className + "." + methodName);
-                      }
-                  } catch (Throwable t) {
-                      c.logError("Hook_" + className, t);
-                  }
-              }
-
               @Override
               public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
                   if (lpparam == null || !TARGET_PKG.equals(lpparam.packageName)) {
@@ -825,12 +727,12 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v2.3 into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v2.4 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
 
-                  // 1. Initialize 100% consistent device profile from dataDir before any class loads
+                  // 1. Initialize consistent device profile from dataDir before any class loads
                   try {
                       b.initConsistentProfile(dataDir, cl);
                   } catch (Throwable t) {
@@ -847,21 +749,19 @@ jobs:
                       c.logError("CrashHook", t);
                   }
 
-                  // 3. Neutralize HungerStation v4.2643.1 (1352) verifyRootIntegrity & Obfuscated Root Checkers!
-                  hookAllIfPresent(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl", "verifyRootIntegrity", 0);
-                  hookAllIfPresent(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 0);
-                  hookAllIfPresent(cl, "o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", 0);
-                  hookAllIfPresent(cl, "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds", "serializer", 0);
-                  hookAllIfPresent(cl, "o.setLocaleList", "serializer", 0);
-                  hookAllIfPresent(cl, "o.setFontWeight", "serializer", 0);
-                  hookAllIfPresent(cl, "o.ewG", "serializer", 0);
-
-                  // Neutralize RootBeer & Sentry & Incognia obfuscated helper classes discovered in 3.txt
-                  hookAllIfPresent(cl, "o.setCustomAttributeArray", "serializer", 3);
-                  hookAllIfPresent(cl, "o.setCustomAttributeArray", "write", 3);
-                  hookAllIfPresent(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 3);
-                  hookAllIfPresent(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "read", 3);
-                  hookAllIfPresent(cl, "io.sentry.android.core.internal.util.PlaybackStateCompat", "IconCompatParcelizer", 3);
+                  // 3. Surgically neutralize ONLY RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend!
+                  try {
+                      Class<?> verifyCls = XposedHelpers.findClassIfExists(
+                          "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", cl);
+                      if (verifyCls != null) {
+                          XposedHelpers.findAndHookMethod(verifyCls, "invokeSuspend", Object.class, new a(0));
+                          c.log("HOOK-OK", "Hooked RiderSupportFeaturesImpl$verifyRootIntegrity$1.invokeSuspend");
+                      } else {
+                          c.log("CLASS-CHECK", "verifyRootIntegrity$1 not found by name, Crash Guard will protect threads");
+                      }
+                  } catch (Throwable t) {
+                      c.logError("VerifyRootHook", t);
+                  }
 
                   // 4. Hook Application.attach(Context) and Application.onCreate()
                   try {
@@ -871,14 +771,14 @@ jobs:
                       c.logError("ApplicationHook", t);
                   }
 
-                  // 5. Hook Activity.onResume() to attach in-app floating log viewer button safely via post()
+                  // 5. Hook Activity.onResume() to flush logs to HS Rider app (NO floating button overlay!)
                   try {
                       XposedHelpers.findAndHookMethod(Activity.class, "onResume", new b(7, null));
                   } catch (Throwable t) {
                       c.logError("ActivityHook", t);
                   }
 
-                  // 6. Hook Google Play Store installer verification & hide root/module packages
+                  // 6. Hook Google Play Store installer verification & hide root packages
                   try {
                       Class<?> pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", cl);
                       XposedHelpers.findAndHookMethod(pmClass, "getInstallerPackageName", String.class, new b(0, TARGET_PKG));
@@ -927,7 +827,7 @@ jobs:
                       c.logError("LocationHook", t);
                   }
 
-                  // 10. Hook Root / Xposed file existence checks & Runtime.exec shell spoofing
+                  // 10. Hook Root / Xposed file existence checks & Runtime.exec root filters
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
                       XposedBridge.hookAllMethods(Runtime.class, "exec", new b(8, null));
@@ -944,9 +844,12 @@ jobs:
           import android.content.ContentProvider;
           import android.content.ContentValues;
           import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
           import android.database.Cursor;
           import android.net.Uri;
           import android.os.Bundle;
+          import android.os.Environment;
           import java.io.File;
           import java.io.FileOutputStream;
           import java.nio.charset.StandardCharsets;
@@ -958,6 +861,17 @@ jobs:
 
               @Override
               public boolean onCreate() {
+                  Context ctx = getContext();
+                  if (ctx != null) {
+                      try {
+                          ctx.grantUriPermission(
+                              "com.logistics.rider.hungerstation",
+                              Uri.parse("content://com.logistics.rider.lsposed.logprovider"),
+                              Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                          );
+                      } catch (Throwable ignored) {
+                      }
+                  }
                   return true;
               }
 
@@ -969,17 +883,39 @@ jobs:
                   try {
                       if ("log".equals(method) && arg != null) {
                           synchronized (LogProvider.class) {
-                              if (f.exists() && f.length() > 256 * 1024) {
+                              if (f.exists() && f.length() > 512 * 1024) {
                                   f.delete();
                               }
                               try (FileOutputStream fos = new FileOutputStream(f, true)) {
                                   fos.write((arg + NL).getBytes(StandardCharsets.UTF_8));
                               }
                           }
+                          return Bundle.EMPTY;
                       } else if ("clear".equals(method)) {
                           synchronized (LogProvider.class) {
                               if (f.exists()) f.delete();
                           }
+                          return Bundle.EMPTY;
+                      } else if ("get_config".equals(method)) {
+                          SharedPreferences prefs = ctx.getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
+                          Bundle cfg = new Bundle();
+                          cfg.putBoolean("opt_master", prefs.getBoolean("opt_master", true));
+                          cfg.putBoolean("opt_integrity", prefs.getBoolean("opt_integrity", true));
+                          cfg.putBoolean("opt_device", prefs.getBoolean("opt_device", true));
+                          cfg.putBoolean("opt_android_id", prefs.getBoolean("opt_android_id", true));
+                          cfg.putBoolean("opt_installer", prefs.getBoolean("opt_installer", true));
+                          cfg.putBoolean("opt_root", prefs.getBoolean("opt_root", true));
+                          cfg.putBoolean("opt_mock", prefs.getBoolean("opt_mock", true));
+                          cfg.putString("brand", prefs.getString("brand", ""));
+                          cfg.putString("manufacturer", prefs.getString("manufacturer", ""));
+                          cfg.putString("model", prefs.getString("model", ""));
+                          cfg.putString("device", prefs.getString("device", ""));
+                          cfg.putString("board", prefs.getString("board", ""));
+                          cfg.putString("product", prefs.getString("product", ""));
+                          cfg.putString("bootloader", prefs.getString("bootloader", ""));
+                          cfg.putString("fingerprint", prefs.getString("fingerprint", ""));
+                          cfg.putString("android_id", prefs.getString("android_id", ""));
+                          return cfg;
                       }
                   } catch (Throwable ignored) {
                   }
@@ -987,22 +923,48 @@ jobs:
               }
 
               public static String readLogs(Context ctx) {
+                  StringBuilder combined = new StringBuilder();
                   try {
                       File f = new File(ctx.getFilesDir(), LOG_FILE_NAME);
                       if (f.exists()) {
                           byte[] bytes = Files.readAllBytes(f.toPath());
                           String content = new String(bytes, StandardCharsets.UTF_8).trim();
-                          if (!content.isEmpty()) return content;
+                          if (!content.isEmpty()) {
+                              combined.append(content);
+                          }
                       }
                   } catch (Throwable ignored) {
                   }
-                  return "No logs received yet." + NL + "1. Enable module in LSPosed for HungerStation." + NL + "2. Open HungerStation and tap the floating [HS Log v2.3] button at the top-left.";
+                  if (combined.length() == 0) {
+                      try {
+                          File dl = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "HS_Rider_Debug.log");
+                          if (dl.exists()) {
+                              byte[] bytes = Files.readAllBytes(dl.toPath());
+                              String content = new String(bytes, StandardCharsets.UTF_8).trim();
+                              if (!content.isEmpty()) {
+                                  combined.append(content);
+                              }
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                  }
+                  if (combined.length() > 0) {
+                      return combined.toString();
+                  }
+                  return "No logs received yet." + NL
+                      + "1. Enable HS Rider v2.4 in LSPosed for HungerStation." + NL
+                      + "2. Open HungerStation Rider, then return here to the [Logs] tab and tap Refresh.";
               }
 
               public static void clearLogs(Context ctx) {
                   try {
                       File f = new File(ctx.getFilesDir(), LOG_FILE_NAME);
                       if (f.exists()) f.delete();
+                  } catch (Throwable ignored) {
+                  }
+                  try {
+                      File dl = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "HS_Rider_Debug.log");
+                      if (dl.exists()) dl.delete();
                   } catch (Throwable ignored) {
                   }
               }
@@ -1040,9 +1002,14 @@ jobs:
           import android.content.ClipData;
           import android.content.ClipboardManager;
           import android.content.Context;
+          import android.content.Intent;
           import android.content.SharedPreferences;
+          import android.net.Uri;
           import android.os.Bundle;
+          import android.view.View;
           import android.widget.Button;
+          import android.widget.CheckBox;
+          import android.widget.LinearLayout;
           import android.widget.TextView;
           import android.widget.Toast;
           import androidx.appcompat.app.AppCompatActivity;
@@ -1052,6 +1019,10 @@ jobs:
           public final class MainActivity extends AppCompatActivity {
               private TextView tvProfileInfo;
               private TextView tvLogs;
+              private LinearLayout layoutTabFeatures;
+              private LinearLayout layoutTabLogs;
+              private Button btnTabFeatures;
+              private Button btnTabLogs;
               private static final String NL = String.valueOf((char) 10);
 
               @SuppressWarnings("deprecation")
@@ -1068,6 +1039,20 @@ jobs:
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
 
+                  try {
+                      grantUriPermission(
+                          "com.logistics.rider.hungerstation",
+                          Uri.parse("content://com.logistics.rider.lsposed.logprovider"),
+                          Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                      );
+                  } catch (Throwable ignored) {
+                  }
+
+                  btnTabFeatures = findViewById(R.id.btn_tab_features);
+                  btnTabLogs = findViewById(R.id.btn_tab_logs);
+                  layoutTabFeatures = findViewById(R.id.layout_tab_features);
+                  layoutTabLogs = findViewById(R.id.layout_tab_logs);
+
                   tvProfileInfo = findViewById(R.id.tv_profile_info);
                   tvLogs = findViewById(R.id.tv_logs);
                   Button btnRandomize = findViewById(R.id.btn_randomize);
@@ -1075,17 +1060,53 @@ jobs:
                   Button btnCopyLogs = findViewById(R.id.btn_copy_logs);
                   Button btnClearLogs = findViewById(R.id.btn_clear_logs);
 
+                  CheckBox cbMaster = findViewById(R.id.cb_master);
+                  CheckBox cbIntegrity = findViewById(R.id.cb_integrity);
+                  CheckBox cbDevice = findViewById(R.id.cb_device);
+                  CheckBox cbAndroidId = findViewById(R.id.cb_android_id);
+                  CheckBox cbInstaller = findViewById(R.id.cb_installer);
+                  CheckBox cbRoot = findViewById(R.id.cb_root);
+                  CheckBox cbMock = findViewById(R.id.cb_mock);
+
                   SharedPreferences prefs = getModulePrefs();
                   if (!prefs.contains("model")) {
                       randomizeProfile(prefs);
                   }
+
+                  cbMaster.setChecked(prefs.getBoolean("opt_master", true));
+                  cbIntegrity.setChecked(prefs.getBoolean("opt_integrity", true));
+                  cbDevice.setChecked(prefs.getBoolean("opt_device", true));
+                  cbAndroidId.setChecked(prefs.getBoolean("opt_android_id", true));
+                  cbInstaller.setChecked(prefs.getBoolean("opt_installer", true));
+                  cbRoot.setChecked(prefs.getBoolean("opt_root", true));
+                  cbMock.setChecked(prefs.getBoolean("opt_mock", true));
+
+                  cbMaster.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_master", c));
+                  cbIntegrity.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_integrity", c));
+                  cbDevice.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_device", c));
+                  cbAndroidId.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_android_id", c));
+                  cbInstaller.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_installer", c));
+                  cbRoot.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_root", c));
+                  cbMock.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_mock", c));
+
                   updateUi(prefs);
                   refreshLogs();
+
+                  btnTabFeatures.setOnClickListener(v -> {
+                      layoutTabFeatures.setVisibility(View.VISIBLE);
+                      layoutTabLogs.setVisibility(View.GONE);
+                  });
+
+                  btnTabLogs.setOnClickListener(v -> {
+                      layoutTabFeatures.setVisibility(View.GONE);
+                      layoutTabLogs.setVisibility(View.VISIBLE);
+                      refreshLogs();
+                  });
 
                   btnRandomize.setOnClickListener(v -> {
                       randomizeProfile(prefs);
                       updateUi(prefs);
-                      Toast.makeText(this, "Device identity & Android ID updated! Force stop & restart HungerStation.", Toast.LENGTH_LONG).show();
+                      Toast.makeText(this, "New Device & Android ID saved! Force stop & restart HungerStation.", Toast.LENGTH_LONG).show();
                   });
 
                   btnRefreshLogs.setOnClickListener(v -> {
@@ -1109,6 +1130,15 @@ jobs:
                   });
               }
 
+              private void saveBool(SharedPreferences prefs, String key, boolean val) {
+                  prefs.edit().putBoolean(key, val).apply();
+                  try {
+                      getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE)
+                          .edit().putBoolean(key, val).apply();
+                  } catch (Throwable ignored) {
+                  }
+              }
+
               @Override
               protected void onResume() {
                   super.onResume();
@@ -1121,24 +1151,53 @@ jobs:
 
               private void randomizeProfile(SharedPreferences prefs) {
                   int idx = ThreadLocalRandom.current().nextInt(h2.a.f1907a.length);
+                  String brand = h2.a.f1907a[idx];
+                  String manufacturer = h2.a.f1908b[idx];
+                  String model = h2.a.f1909c[idx];
+                  String device = h2.a.d[idx];
+                  String board = h2.a.f1910e[idx];
+                  String product = h2.a.f1911f[idx];
+                  String bootloader = h2.a.f1912g[idx];
+                  String fingerprint = h2.a.h[idx];
+                  String androidId = b.generateRandomHex(16);
+
                   prefs.edit()
-                      .putString("brand", h2.a.f1907a[idx])
-                      .putString("manufacturer", h2.a.f1908b[idx])
-                      .putString("model", h2.a.f1909c[idx])
-                      .putString("device", h2.a.d[idx])
-                      .putString("board", h2.a.f1910e[idx])
-                      .putString("product", h2.a.f1911f[idx])
-                      .putString("bootloader", h2.a.f1912g[idx])
-                      .putString("fingerprint", h2.a.h[idx])
-                      .putString("android_id", b.generateRandomHex(16))
+                      .putString("brand", brand)
+                      .putString("manufacturer", manufacturer)
+                      .putString("model", model)
+                      .putString("device", device)
+                      .putString("board", board)
+                      .putString("product", product)
+                      .putString("bootloader", bootloader)
+                      .putString("fingerprint", fingerprint)
+                      .putString("android_id", androidId)
                       .putBoolean("spoof_device", true)
                       .putBoolean("spoof_device_v2", true)
                       .apply();
+
+                  try {
+                      getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE)
+                          .edit()
+                          .putString("brand", brand)
+                          .putString("manufacturer", manufacturer)
+                          .putString("model", model)
+                          .putString("device", device)
+                          .putString("board", board)
+                          .putString("product", product)
+                          .putString("bootloader", bootloader)
+                          .putString("fingerprint", fingerprint)
+                          .putString("android_id", androidId)
+                          .putBoolean("spoof_device", true)
+                          .putBoolean("spoof_device_v2", true)
+                          .apply();
+                  } catch (Throwable ignored) {
+                  }
               }
 
               private void updateUi(SharedPreferences prefs) {
-                  String info = "Device: " + prefs.getString("brand", "") + " "
-                      + prefs.getString("model", "") + " [" + prefs.getString("device", "") + "]" + NL
+                  String info = "Brand / Model: " + prefs.getString("brand", "") + " "
+                      + prefs.getString("model", "") + " (" + prefs.getString("device", "") + ")" + NL
+                      + "Manufacturer: " + prefs.getString("manufacturer", "") + NL
                       + "Android ID: " + prefs.getString("android_id", "") + NL
                       + "Fingerprint: " + prefs.getString("fingerprint", "");
                   tvProfileInfo.setText(info);
@@ -1168,77 +1227,195 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Rider v2.3 - Integrity &amp; Spoofer"
+                  android:text="HS Rider v2.4 - Control Panel"
                   android:textSize="20sp"
                   android:textStyle="bold"
                   android:gravity="center"
-                  android:layout_marginBottom="8dp" />
-
-              <TextView
-                  android:id="@+id/tv_profile_info"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:textSize="12sp"
-                  android:padding="10dp"
-                  android:background="#1E88E51A"
-                  android:layout_marginBottom="8dp" />
-
-              <Button
-                  android:id="@+id/btn_randomize"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Randomize Device Identity"
-                  android:layout_marginBottom="8dp" />
+                  android:layout_marginBottom="12dp" />
 
               <LinearLayout
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
                   android:orientation="horizontal"
-                  android:layout_marginBottom="8dp">
+                  android:layout_marginBottom="12dp">
 
                   <Button
-                      android:id="@+id/btn_refresh_logs"
+                      android:id="@+id/btn_tab_features"
                       android:layout_width="0dp"
                       android:layout_height="wrap_content"
                       android:layout_weight="1"
-                      android:text="Refresh"
-                      android:textSize="12sp" />
-
-                  <Button
-                      android:id="@+id/btn_copy_logs"
-                      android:layout_width="0dp"
-                      android:layout_height="wrap_content"
-                      android:layout_weight="1"
-                      android:text="Copy Log"
-                      android:textSize="12sp"
-                      android:layout_marginStart="6dp"
+                      android:text="1. Features (الوظائف)"
                       android:layout_marginEnd="6dp" />
 
                   <Button
-                      android:id="@+id/btn_clear_logs"
+                      android:id="@+id/btn_tab_logs"
                       android:layout_width="0dp"
                       android:layout_height="wrap_content"
                       android:layout_weight="1"
-                      android:text="Clear"
-                      android:textSize="12sp" />
+                      android:text="2. Error Logs (السجل)"
+                      android:layout_marginStart="6dp" />
               </LinearLayout>
 
-              <ScrollView
+              <LinearLayout
+                  android:id="@+id/layout_tab_features"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
                   android:layout_weight="1"
-                  android:background="#121212"
-                  android:padding="10dp">
+                  android:orientation="vertical"
+                  android:visibility="visible">
 
-                  <TextView
-                      android:id="@+id/tv_logs"
+                  <ScrollView
+                      android:layout_width="match_parent"
+                      android:layout_height="match_parent">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="vertical">
+
+                          <TextView
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Spoofed Device Identity (هوية الجهاز المزيفة):"
+                              android:textStyle="bold"
+                              android:textSize="14sp"
+                              android:layout_marginBottom="4dp" />
+
+                          <TextView
+                              android:id="@+id/tv_profile_info"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:textSize="12sp"
+                              android:padding="12dp"
+                              android:background="#1E88E51A"
+                              android:layout_marginBottom="8dp" />
+
+                          <Button
+                              android:id="@+id/btn_randomize"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Generate New Device Identity (تغيير الهوية)"
+                              android:layout_marginBottom="16dp" />
+
+                          <TextView
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Active Protection Modules (قائمة الوظائف):"
+                              android:textStyle="bold"
+                              android:textSize="14sp"
+                              android:layout_marginBottom="8dp" />
+
+                          <CheckBox
+                              android:id="@+id/cb_master"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Enable Module Master Switch (تفعيل الإضافة العام)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_integrity"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Bypass verifyRootIntegrity &amp; Crash Guard (منع الانهيار وفحص النزاهة)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_device"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Spoof Device Build &amp; SystemProperties (تزييف موديل وبصمة الجهاز)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_android_id"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Spoof ANDROID_ID (تزييف معرف أندرويد)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_installer"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Spoof Google Play Store Installer (تزييف مصدر التثبيت)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_root"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Hide Root Files, Magisk &amp; Shell Commands (إخفاء الروت وأوامر الفحص)"
+                              android:checked="true" />
+
+                          <CheckBox
+                              android:id="@+id/cb_mock"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="Hide Mock Location &amp; USB Debugging (إخفاء الموقع الوهمي وخيارات المطور)"
+                              android:checked="true" />
+
+                      </LinearLayout>
+                  </ScrollView>
+              </LinearLayout>
+
+              <LinearLayout
+                  android:id="@+id/layout_tab_logs"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:orientation="vertical"
+                  android:visibility="gone">
+
+                  <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:textColor="#00E676"
-                      android:textSize="11sp"
-                      android:fontFamily="monospace"
-                      android:textIsSelectable="true" />
-              </ScrollView>
+                      android:orientation="horizontal"
+                      android:layout_marginBottom="8dp">
+
+                      <Button
+                          android:id="@+id/btn_refresh_logs"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Refresh (تحديث)"
+                          android:textSize="12sp" />
+
+                      <Button
+                          android:id="@+id/btn_copy_logs"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Copy (نسخ)"
+                          android:textSize="12sp"
+                          android:layout_marginStart="6dp"
+                          android:layout_marginEnd="6dp" />
+
+                      <Button
+                          android:id="@+id/btn_clear_logs"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Clear (مسح)"
+                          android:textSize="12sp" />
+                  </LinearLayout>
+
+                  <ScrollView
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:background="#121212"
+                      android:padding="10dp">
+
+                      <TextView
+                          android:id="@+id/tv_logs"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:textColor="#00E676"
+                          android:textSize="11sp"
+                          android:fontFamily="monospace"
+                          android:textIsSelectable="true" />
+                  </ScrollView>
+              </LinearLayout>
 
           </LinearLayout>
           EOF
@@ -1280,7 +1457,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Rider v2.3</string>
+              <string name="app_name">HS Rider v2.4</string>
           </resources>
           EOF
 
@@ -1305,6 +1482,10 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.logistics.rider.lsposed">
 
+              <queries>
+                  <package android:name="com.logistics.rider.hungerstation" />
+              </queries>
+
               <application
                   android:allowBackup="true"
                   android:dataExtractionRules="@xml/data_extraction_rules"
@@ -1324,7 +1505,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Rider Killer v2.3 (VerifyRootIntegrity + Incognia Bypass)" />
+                      android:value="HS Rider Killer v2.4 (Standalone Control Panel &amp; Log Viewer)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -1335,6 +1516,9 @@ jobs:
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
                           <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
                       </intent-filter>
                   </activity>
@@ -1342,7 +1526,8 @@ jobs:
                   <provider
                       android:name=".LogProvider"
                       android:authorities="com.logistics.rider.lsposed.logprovider"
-                      android:exported="true" />
+                      android:exported="true"
+                      android:grantUriPermissions="true" />
 
               </application>
           </manifest>
@@ -1393,8 +1578,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 5
-                  versionName "2.3"
+                  versionCode 6
+                  versionName "2.4"
               }
 
               signingConfigs {
@@ -1435,12 +1620,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.3.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Rider-v2.4.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Rider-v2.3-APK
-          path: output/HS-Rider-v2.3.apk
+          name: HS-Rider-v2.4-APK
+          path: output/HS-Rider-v2.4.apk
           if-no-files-found: error
