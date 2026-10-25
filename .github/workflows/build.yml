@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v2.8 (Fix IAL403 Login + FakeProcess + NPE Fix)
+    name: Build Signed HS Panel v2.9 (Fix 1Shot Mode & Dynamic VRI Helper Hook)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v2.8 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v2.9 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -126,6 +126,7 @@ jobs:
           import java.nio.charset.StandardCharsets;
           import java.text.SimpleDateFormat;
           import java.util.ArrayList;
+          import java.util.Arrays;
           import java.util.Date;
           import java.util.Enumeration;
           import java.util.List;
@@ -171,7 +172,8 @@ jobs:
                   boolean isCritical = "INIT".equals(tag) || "ERROR".equals(tag) || "CRASH".equals(tag)
                       || "CRASH-GUARD".equals(tag) || "APP-EXIT".equals(tag) || "BYPASS".equals(tag)
                       || "ACTIVITY".equals(tag) || "SPOOF".equals(tag) || "IAL403".equals(tag)
-                      || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag) || "DEX-SCAN".equals(tag);
+                      || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag) || "DEX-SCAN".equals(tag)
+                      || "NPE-TRACE".equals(tag) || "VRI-TRACE".equals(tag);
                   if (count > 3 && !isCritical) {
                       return;
                   }
@@ -241,9 +243,22 @@ jobs:
                       if (found > 0) callers.append(" <- ");
                       callers.append(cls).append(".").append(mth).append(":").append(el.getLineNumber());
                       found++;
-                      if (found >= 5) break;
+                      if (found >= 6) break;
                   }
                   return callers.length() > 0 ? callers.toString() : "system/native";
+              }
+
+              public static String formatTopStack(Throwable t, int maxFrames) {
+                  if (t == null) return "none";
+                  StackTraceElement[] stack = t.getStackTrace();
+                  if (stack == null || stack.length == 0) return "empty-stack";
+                  StringBuilder sb = new StringBuilder();
+                  int lim = Math.min(stack.length, maxFrames);
+                  for (int i = 0; i < lim; i++) {
+                      if (i > 0) sb.append(" <- ");
+                      sb.append(stack[i].getClassName()).append(".").append(stack[i].getMethodName()).append(":").append(stack[i].getLineNumber());
+                  }
+                  return sb.toString();
               }
 
               public static boolean isIntegrityInStack() {
@@ -252,7 +267,7 @@ jobs:
                       String cn = el.getClassName();
                       if (cn.contains("verifyRootIntegrity") || cn.contains("RiderSupportFeaturesImpl")
                               || cn.contains("setLocaleList") || cn.contains("setFontWeight")
-                              || cn.contains("ewG") || cn.contains("Login") || cn.contains("Auth")
+                              || cn.contains("ewG")
                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
                           return true;
@@ -262,54 +277,53 @@ jobs:
               }
 
               /**
-               * Dynamically scans the loaded ClassLoader / DexElements in `o.*` and `com.roadrunner.*`
-               * to find any obfuscated class equivalent to `o.ewG` (zero-arg `serializer()` method returning
-               * String/Header/Token or root/integrity check) and hooks it automatically!
+               * Inspects the fields of `RiderSupportFeaturesImpl$verifyRootIntegrity$1` (and any referenced class in `o.*`)
+               * so we immediately hook the exact obfuscated class (`o.ewG` equivalent in v4.2643.1) that `verifyRootIntegrity$1` uses!
                */
               @SuppressWarnings("deprecation")
               public static void scanAndHookDynamicIntegrityClasses(ClassLoader cl, ApplicationInfo appInfo) {
-                  if (cl == null || appInfo == null || appInfo.sourceDir == null) return;
-                  new Thread(() -> {
-                      try {
-                          List<String> apkPaths = new ArrayList<>();
-                          apkPaths.add(appInfo.sourceDir);
-                          if (appInfo.splitSourceDirs != null) {
-                              for (String s : appInfo.splitSourceDirs) {
-                                  apkPaths.add(s);
-                              }
+                  if (cl == null) return;
+                  try {
+                      Class<?> vriCls = cl.loadClass("com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1");
+                      Field[] fields = vriCls.getDeclaredFields();
+                      StringBuilder fieldDesc = new StringBuilder();
+                      for (Field f : fields) {
+                          f.setAccessible(true);
+                          Class<?> ft = f.getType();
+                          if (fieldDesc.length() > 0) fieldDesc.append(", ");
+                          fieldDesc.append(f.getName()).append(":").append(ft.getName());
+                          // If field type is an obfuscated class or roadrunner support class, inspect its methods and fields!
+                          if (ft.getName().startsWith("o.") || ft.getName().startsWith("com.roadrunner.")) {
+                              inspectHelperClass(cl, ft, 1);
                           }
-                          int hookedZeroArgSerializers = 0;
-                          int hookedIntegrityMethods = 0;
-                          for (String path : apkPaths) {
-                              try {
-                                  DexFile df = new DexFile(path);
-                                  Enumeration<String> entries = df.entries();
-                                  while (entries.hasMoreElements()) {
-                                      String clsName = entries.nextElement();
-                                      if (clsName == null) continue;
-                                      // Check com.roadrunner.* integrity/security/auth classes
-                                      if (clsName.startsWith("com.roadrunner.") && (clsName.contains("Integrity") || clsName.contains("Root") || clsName.contains("RiderSupportFeaturesImpl"))) {
-                                          try {
-                                              Class<?> k = cl.loadClass(clsName);
-                                              for (Method m : k.getDeclaredMethods()) {
-                                                  if (m.getName().contains("Root") || m.getName().contains("Integrity") || "invokeSuspend".equals(m.getName())) {
-                                                      XposedBridge.hookMethod(m, new a(4));
-                                                      hookedIntegrityMethods++;
-                                                  }
-                                              }
-                                          } catch (Throwable ignored) {
-                                          }
-                                      }
-                                  }
-                                  df.close();
-                              } catch (Throwable ignored) {
-                              }
-                          }
-                          log("DEX-SCAN", "Auto-scanned APK dex files: hooked " + hookedIntegrityMethods + " roadrunner integrity methods.");
-                      } catch (Throwable t) {
-                          logError("DexScan", t);
                       }
-                  }, "HS-DexScanner").start();
+                      log("VRI-TRACE", "verifyRootIntegrity$1 fields: [" + fieldDesc + "]");
+                  } catch (Throwable t) {
+                      logError("VriInspect", t);
+                  }
+              }
+
+              private static void inspectHelperClass(ClassLoader cl, Class<?> cls, int depth) {
+                  if (cls == null || depth > 2) return;
+                  try {
+                      StringBuilder mDesc = new StringBuilder();
+                      for (Method m : cls.getDeclaredMethods()) {
+                          if (mDesc.length() > 0) mDesc.append("; ");
+                          mDesc.append(m.getName()).append(Arrays.toString(m.getParameterTypes())).append("->").append(m.getReturnType().getSimpleName());
+                          // If this helper class has a 0-arg method returning String or Object (like o.ewG.serializer() in 1Shot), hook it to trace & bypass!
+                          if (m.getParameterTypes().length == 0 && (m.getReturnType() == String.class || m.getReturnType() == Object.class || m.getReturnType() == boolean.class)) {
+                              XposedBridge.hookMethod(m, new a(7));
+                          }
+                      }
+                      log("VRI-TRACE", "Helper class " + cls.getName() + " methods: " + mDesc);
+                      for (Field f : cls.getDeclaredFields()) {
+                          Class<?> ft = f.getType();
+                          if ((ft.getName().startsWith("o.") || ft.getName().startsWith("com.roadrunner.")) && !ft.equals(cls)) {
+                              inspectHelperClass(cl, ft, depth + 1);
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
               }
 
               public static synchronized void flushPendingToProvider() {
@@ -368,32 +382,20 @@ jobs:
                   this.f1994a = i3;
               }
 
-              private static void setSafeDefaultResult(XC_MethodHook.MethodHookParam param) {
-                  Class<?> retType = (param.method instanceof Method)
-                      ? ((Method) param.method).getReturnType() : Object.class;
-                  if (retType == boolean.class || retType == Boolean.class) {
-                      param.setResult(Boolean.FALSE);
-                  } else if (retType == int.class || retType == Integer.class) {
-                      param.setResult(0);
-                  } else if (retType == long.class || retType == Long.class) {
-                      param.setResult(0L);
-                  } else {
-                      param.setResult(null);
-                  }
-              }
-
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // 1Shot exact equivalent: o.ewG.serializer / o.setFontWeight.serializer -> null
+                      case 0: // 1Shot exact equivalent: o.ewG.serializer (0-arg only!) -> null
                           if (!b.sOptIntegrityBypass) return;
-                          setSafeDefaultResult(methodHookParam);
-                          c.log("BYPASS", "Bypassed " + methodHookParam.method.getDeclaringClass().getName() + "."
-                              + methodHookParam.method.getName() + " -> null (1Shot mode) | caller=" + c.getCallerInfo());
+                          if (methodHookParam.args == null || methodHookParam.args.length == 0) {
+                              methodHookParam.setResult(null);
+                              c.log("BYPASS", "Bypassed " + methodHookParam.method.getDeclaringClass().getName() + "."
+                                  + methodHookParam.method.getName() + "() -> null (1Shot mode) | caller=" + c.getCallerInfo());
+                          }
                           return;
                       case 2: // Location.isMock / isFromMockProvider
-                          if (!b.sOptMockHide || b.sOpt1ShotExactMode) return;
+                          if (!b.sOptMockHide) return;
                           c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
                               + "() -> false | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(Boolean.FALSE);
@@ -403,43 +405,43 @@ jobs:
                           c.log("INSTALLER", "Spoofed getPackageSource() -> 2 (PACKAGE_SOURCE_STORE) | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(2);
                           return;
-                      case 4: // verifyRootIntegrity$1.invokeSuspend & RiderSupportFeaturesImpl
-                          if (!b.sOptIntegrityBypass) return;
-                          String mName = methodHookParam.method.getName();
-                          if ("invokeSuspend".equals(mName) && methodHookParam.method.getDeclaringClass().getName().contains("verifyRootIntegrity")) {
-                              Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
-                                  ? methodHookParam.thisObject.getClass().getClassLoader() : null);
-                              if (unitInstance != null) {
-                                  methodHookParam.setResult(unitInstance);
-                                  c.log("BYPASS", "Short-circuited verifyRootIntegrity$1.invokeSuspend -> kotlin.Unit (no NPE)");
-                                  return;
-                              }
-                          } else if (mName.toLowerCase().contains("root") || mName.toLowerCase().contains("integrity")) {
-                              Class<?> retType = (methodHookParam.method instanceof Method)
-                                  ? ((Method) methodHookParam.method).getReturnType() : Object.class;
-                              if (retType == boolean.class || retType == Boolean.class) {
-                                  methodHookParam.setResult(Boolean.FALSE);
-                                  c.log("BYPASS", "Bypassed " + methodHookParam.method.getDeclaringClass().getSimpleName() + "." + mName + " -> false");
-                              }
-                          }
+                      case 4: // verifyRootIntegrity$1.invokeSuspend
+                          // IMPORTANT: Let invokeSuspend run when its coroutine state is 0 so it initializes its continuation properly,
+                          // OR if we short-circuit, log what happens. Wait: in v2.7 it completed normally 6 times when allowed to run!
+                          // Why did it throw NPE 3 times? Let's let it run and log the EXACT top stack frame if NPE occurs!
                           return;
-                      case 5: // o.x5.serializer (1Shot equivalent when returning installer or integrity string)
+                      case 5: // o.x5.serializer tracer
                           return;
-                      case 6: // Obfuscated root-check helpers (o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing / o.setCustomAttributeArray)
+                      case 6: // Obfuscated root-check helpers: ONLY override 0-arg or 1-arg boolean methods, NEVER String or PackageInfo methods!
                           if (!b.sOptRootHide && !b.sOptIntegrityBypass) return;
                           Class<?> retType = (methodHookParam.method instanceof Method)
                               ? ((Method) methodHookParam.method).getReturnType() : Object.class;
-                          if (retType == boolean.class || retType == Boolean.class) {
+                          // CRITICAL FIX: Never touch serializer(String)->String or write(int,String)->PackageInfo!
+                          // Returning false/null on serializer(String)->String caused ClassCastException/NullPointerException!
+                          if (retType == boolean.class) {
                               methodHookParam.setResult(Boolean.FALSE);
-                              c.log("BYPASS", "Blocked obfuscated root helper "
+                              c.log("BYPASS", "Blocked boolean root check "
                                   + methodHookParam.method.getDeclaringClass().getName() + "."
                                   + methodHookParam.method.getName() + " -> false | caller=" + c.getCallerInfo());
-                          } else if (retType == String.class && (methodHookParam.args == null || methodHookParam.args.length == 0)) {
-                              // If an obfuscated 0-arg serializer() returns a root-flag string (like o.ewG.serializer in 1Shot), return null!
-                              methodHookParam.setResult(null);
-                              c.log("BYPASS", "Bypassed obfuscated String serializer "
-                                  + methodHookParam.method.getDeclaringClass().getName() + "."
-                                  + methodHookParam.method.getName() + " -> null (1Shot style) | caller=" + c.getCallerInfo());
+                          }
+                          return;
+                      case 7: // Dynamic helper method discovered inside verifyRootIntegrity$1
+                          if (!b.sOptIntegrityBypass) return;
+                          if (c.isIntegrityInStack()) {
+                              Class<?> rt = (methodHookParam.method instanceof Method)
+                                  ? ((Method) methodHookParam.method).getReturnType() : Object.class;
+                              if (rt == String.class && (methodHookParam.args == null || methodHookParam.args.length == 0)) {
+                                  // This is the EXACT 1Shot.apk equivalent of o.ewG.serializer() -> null!
+                                  methodHookParam.setResult(null);
+                                  c.log("BYPASS", "1Shot Dynamic Bypass: "
+                                      + methodHookParam.method.getDeclaringClass().getName() + "."
+                                      + methodHookParam.method.getName() + "() -> null | caller=" + c.getCallerInfo());
+                              } else if (rt == boolean.class) {
+                                  methodHookParam.setResult(Boolean.FALSE);
+                                  c.log("BYPASS", "1Shot Dynamic Bypass: "
+                                      + methodHookParam.method.getDeclaringClass().getName() + "."
+                                      + methodHookParam.method.getName() + "() -> false | caller=" + c.getCallerInfo());
+                              }
                           }
                           return;
                       default: // InstallSourceInfo package name methods (case 1)
@@ -454,19 +456,21 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
-                  if (this.f1994a == 0 || this.f1994a == 4 || this.f1994a == 6) {
+                  if (this.f1994a == 4) {
                       Throwable t = methodHookParam.getThrowable();
-                      if (t != null && b.sOptIntegrityBypass) {
-                          c.log("BYPASS", "Caught & cleared exception in "
-                              + methodHookParam.method.getDeclaringClass().getName() + "." + methodHookParam.method.getName()
-                              + " (" + t.getClass().getSimpleName() + ": " + t.getMessage() + ")");
-                          if ("invokeSuspend".equals(methodHookParam.method.getName())) {
+                      if (t != null) {
+                          // Log the exact top stack frames of the NPE so we see the exact class & line number!
+                          c.log("NPE-TRACE", "Exception in " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName() + ": " + t.getClass().getSimpleName()
+                              + " | stack=" + c.formatTopStack(t, 8));
+                          if (b.sOptIntegrityBypass) {
                               Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
                                   ? methodHookParam.thisObject.getClass().getClassLoader() : null);
                               methodHookParam.setResult(unitInstance);
-                          } else {
-                              setSafeDefaultResult(methodHookParam);
                           }
+                      } else {
+                          c.log("BYPASS", "verifyRootIntegrity$1.invokeSuspend completed normally! result="
+                              + String.valueOf(methodHookParam.getResult()));
                       }
                   } else if (this.f1994a == 5) {
                       String argsStr = methodHookParam.args != null ? Arrays.toString(methodHookParam.args) : "[]";
@@ -474,6 +478,12 @@ jobs:
                       Throwable t = methodHookParam.getThrowable();
                       c.log("X5-TRACE", "o.x5." + methodHookParam.method.getName() + "(" + argsStr + ") -> result="
                           + String.valueOf(res) + (t != null ? " throwable=" + t : "") + " | caller=" + c.getCallerInfo());
+                  } else if (this.f1994a == 7) {
+                      Object res = methodHookParam.getResult();
+                      Throwable t = methodHookParam.getThrowable();
+                      c.log("VRI-TRACE", "Helper " + methodHookParam.method.getDeclaringClass().getName() + "."
+                          + methodHookParam.method.getName() + "() returned=" + String.valueOf(res)
+                          + (t != null ? " throwable=" + t : "") + " | caller=" + c.getCallerInfo());
                   }
               }
           }
@@ -524,7 +534,6 @@ jobs:
               private static volatile String sDataDir;
 
               public static volatile boolean sOptMaster = true;
-              public static volatile boolean sOpt1ShotExactMode = false;
               public static volatile boolean sOptIntegrityBypass = true;
               public static volatile boolean sOptDeviceSpoof = true;
               public static volatile boolean sOptAndroidId = true;
@@ -737,7 +746,6 @@ jobs:
                       Bundle cfg = ctx.getContentResolver().call(c.LOG_PROVIDER_URI, "get_config", null, null);
                       if (cfg != null && cfg.containsKey("brand")) {
                           sOptMaster = cfg.getBoolean("opt_master", true);
-                          sOpt1ShotExactMode = cfg.getBoolean("opt_1shot_exact", false);
                           sOptIntegrityBypass = cfg.getBoolean("opt_integrity", true);
                           sOptDeviceSpoof = cfg.getBoolean("opt_device", true);
                           sOptAndroidId = cfg.getBoolean("opt_android_id", true);
@@ -759,8 +767,7 @@ jobs:
                               saveProfileToLocalProp(sDataDir);
                               syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v2.8: " + sBrand + " / " + sModel
-                                  + (sOpt1ShotExactMode ? " [1Shot Exact Mode ON]" : ""));
+                              c.log("PREFS", "Synced settings & profile from HS Panel v2.9: " + sBrand + " / " + sModel);
                           }
                       }
                   } catch (Throwable ignored) {
@@ -773,7 +780,6 @@ jobs:
                       XSharedPreferences xprefs = new XSharedPreferences("com.logistics.rider.lsposed", "com.logistics.rider.settings");
                       xprefs.reload();
                       sOptMaster = xprefs.getBoolean("opt_master", sOptMaster);
-                      sOpt1ShotExactMode = xprefs.getBoolean("opt_1shot_exact", sOpt1ShotExactMode);
                       sOptIntegrityBypass = xprefs.getBoolean("opt_integrity", sOptIntegrityBypass);
                       sOptDeviceSpoof = xprefs.getBoolean("opt_device", sOptDeviceSpoof);
                       sOptAndroidId = xprefs.getBoolean("opt_android_id", sOptAndroidId);
@@ -856,14 +862,12 @@ jobs:
                       XposedHelpers.setStaticObjectField(buildClass, "MODEL", sModel);
                       XposedHelpers.setStaticObjectField(buildClass, "DEVICE", sDevice);
                       XposedHelpers.setStaticObjectField(buildClass, "BOARD", sBoard);
+                      XposedHelpers.setStaticObjectField(buildClass, "HARDWARE", sBoard);
                       XposedHelpers.setStaticObjectField(buildClass, "PRODUCT", sProduct);
                       XposedHelpers.setStaticObjectField(buildClass, "BOOTLOADER", sBootloader);
                       XposedHelpers.setStaticObjectField(buildClass, "FINGERPRINT", sFingerprint);
-                      if (!sOpt1ShotExactMode) {
-                          XposedHelpers.setStaticObjectField(buildClass, "HARDWARE", sBoard);
-                          XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
-                          XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
-                      }
+                      XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
+                      XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
                       if (!sSpoofLogged) {
                           sSpoofLogged = true;
                           c.log("SPOOF", "Consistent Build spoof active: " + sBrand + " / " + sModel + " / AndroidID=" + sAndroidId);
@@ -908,7 +912,7 @@ jobs:
                           }
                           return;
                       case 2: // Settings.Secure.getString(android_id)
-                          if (!sOptAndroidId || sOpt1ShotExactMode) return;
+                          if (!sOptAndroidId) return;
                           if (methodHookParam.args.length >= 2 && "android_id".equals(methodHookParam.args[1])) {
                               if (sAndroidId != null) {
                                   c.log("ANDROID_ID", "Settings.Secure.getString(android_id) -> " + sAndroidId + " | caller=" + c.getCallerInfo());
@@ -917,7 +921,7 @@ jobs:
                           }
                           return;
                       case 3: // Settings.Global/Secure.getInt (ADB / DevOptions / MockLocation)
-                          if (!sOptMockHide || sOpt1ShotExactMode) return;
+                          if (!sOptMockHide) return;
                           if (methodHookParam.args.length >= 2 && methodHookParam.args[1] instanceof String) {
                               String key = (String) methodHookParam.args[1];
                               if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
@@ -927,7 +931,7 @@ jobs:
                           }
                           return;
                       case 4: // SystemProperties.get
-                          if (!sOptDeviceSpoof || sOpt1ShotExactMode) return;
+                          if (!sOptDeviceSpoof) return;
                           if (methodHookParam.args.length >= 1 && methodHookParam.args[0] instanceof String) {
                               String prop = (String) methodHookParam.args[0];
                               String spoofed = null;
@@ -956,7 +960,7 @@ jobs:
                           }
                           return;
                       case 5: // File.exists
-                          if (!sOptRootHide || sOpt1ShotExactMode) return;
+                          if (!sOptRootHide) return;
                           if (methodHookParam.thisObject instanceof File) {
                               String path = ((File) methodHookParam.thisObject).getAbsolutePath();
                               if (path != null && (path.endsWith("/su") || path.endsWith("/busybox")
@@ -969,7 +973,7 @@ jobs:
                           }
                           return;
                       case 6: // PackageManager.getPackageInfo / getApplicationInfo
-                          if (!sOptRootHide || sOpt1ShotExactMode) return;
+                          if (!sOptRootHide) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                               String pkgName = (String) methodHookParam.args[0];
                               if (HIDDEN_PKGS.contains(pkgName)) {
@@ -979,7 +983,7 @@ jobs:
                           }
                           return;
                       case 8: // Runtime.exec(String / String[]) -> Return clean FakeProcess instead of throwing IOException!
-                          if (!sOptRootHide || sOpt1ShotExactMode) return;
+                          if (!sOptRootHide) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
                               String cmdStr;
                               if (methodHookParam.args[0] instanceof String[]) {
@@ -1026,7 +1030,7 @@ jobs:
                           c.log("APP-EXIT", "App called " + methodHookParam.method.getName() + "(" + exitArg + ") | caller=" + c.getCallerInfo());
                           return;
                       case 11: // ProcessBuilder.start() -> Return clean FakeProcess instead of throwing IOException!
-                          if (!sOptRootHide || sOpt1ShotExactMode) return;
+                          if (!sOptRootHide) return;
                           if (methodHookParam.thisObject instanceof ProcessBuilder) {
                               List<String> cmdList = ((ProcessBuilder) methodHookParam.thisObject).command();
                               String cmdStr = cmdList != null ? cmdList.toString() : "";
@@ -1045,7 +1049,7 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
-                  if (this.f1995a == 1) { // Also re-apply Build spoof in Application.onCreate afterHookedMethod (exact 1Shot timing)
+                  if (this.f1995a == 1) { // Re-apply Build spoof in Application.onCreate afterHookedMethod (exact 1Shot timing)
                       ClassLoader cl = (ClassLoader) this.f1996b;
                       applyBuildSpoof(cl);
                   } else if (this.f1995a == 7) { // Activity.onResume
@@ -1057,7 +1061,7 @@ jobs:
                   } else if (this.f1995a == 12) { // TextView.setText - Trace IAL403 / Unauthorized error origin
                       if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof CharSequence) {
                           String txt = methodHookParam.args[0].toString();
-                          if (txt.contains("IAL403") || txt.contains("Unauthorized")) {
+                          if (txt.contains("IAL403") || txt.contains("Unauthorized") || txt.contains("403")) {
                               c.log("IAL403", "UI displayed error: \"" + txt + "\" | caller=" + c.getCallerInfo());
                           }
                       }
@@ -1106,6 +1110,10 @@ jobs:
                       StringBuilder sigs = new StringBuilder();
                       for (Method m : methods) {
                           if (targetMethod == null || targetMethod.equals(m.getName())) {
+                              // For hookType 6 (obfuscated root helpers), ONLY hook boolean-returning methods!
+                              if (hookType == 6 && m.getReturnType() != boolean.class) {
+                                  continue;
+                              }
                               if (sigs.length() > 0) sigs.append("; ");
                               sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
                                   .append("->").append(m.getReturnType().getSimpleName());
@@ -1131,7 +1139,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v2.8 into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v2.9 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
@@ -1161,20 +1169,16 @@ jobs:
                       inspectAndHookClass(cl, cand, "serializer", 0, false);
                   }
 
-                  // 2. Hook HungerStation v4.2643.1+ obfuscated root-check classes discovered from stack traces
+                  // 2. Hook HungerStation v4.2643.1+ obfuscated boolean root-check methods ONLY (never String/PackageInfo methods!)
                   inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 6, false);
-                  inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "read", 6, false);
                   inspectAndHookClass(cl, "o.setCustomAttributeArray", "serializer", 6, false);
                   inspectAndHookClass(cl, "o.setCustomAttributeArray", "write", 6, false);
 
-                  // 3. Hook verifyRootIntegrity$1.invokeSuspend (short-circuits to kotlin.Unit without NPE!)
+                  // 3. Hook verifyRootIntegrity$1.invokeSuspend & inspect its helper fields to dynamically hook the exact o.ewG equivalent!
                   inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4, true);
-                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl", null, 4, false);
-
-                  // 4. Auto-scan APK dex for any other com.roadrunner.* Integrity/Root classes
                   c.scanAndHookDynamicIntegrityClasses(cl, lpparam.appInfo);
 
-                  // 5. Trace o.x5.serializer return values (type 5)
+                  // 4. Trace o.x5.serializer return values (type 5)
                   inspectAndHookClass(cl, "o.x5", "serializer", 5, false);
 
                   try {
@@ -2064,12 +2068,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v2.8.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v2.9.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v2.8-APK
-          path: output/HS-Panel-v2.8.apk
+          name: HS-Panel-v2.9-APK
+          path: output/HS-Panel-v2.9.apk
           if-no-files-found: error
