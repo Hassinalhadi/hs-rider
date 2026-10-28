@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v3.2 (BaseDexClassLoader Constructor + findClass Hook)
+    name: Build Signed HS Panel v3.3 (Pinpoint InMemoryDex o.setFontWeight Hook - Zero Lag)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v3.2 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v3.3 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -136,7 +136,6 @@ jobs:
               private static final List<String> sPendingProviderLines = new ArrayList<>();
               private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
               private static final Set<String> sHookedClasses = ConcurrentHashMap.newKeySet();
-              private static final Set<ClassLoader> sKnownClassLoaders = ConcurrentHashMap.newKeySet();
               private static volatile Context sTargetContext;
               public static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
               private static final String NL = String.valueOf((char) 10);
@@ -260,49 +259,28 @@ jobs:
                   return sb.toString();
               }
 
-              public static void registerClassLoader(ClassLoader cl) {
-                  if (cl == null) return;
-                  sKnownClassLoaders.add(cl);
-                  tryHookLateIntegrityClasses(cl);
-              }
-
-              public static void sweepAllKnownClassLoaders() {
-                  for (ClassLoader cl : sKnownClassLoaders) {
-                      tryHookLateIntegrityClasses(cl);
-                  }
-              }
-
               /**
-               * Hooks `o.setFontWeight.serializer`, `o.ewG.serializer`, `o.setLocaleList.serializer`,
-               * `o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer`, and `o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer`
-               * across ANY discovered secondary/custom ClassLoader!
+               * Checks if `o.setFontWeight` or `o.ewG` exists in the newly created InMemoryDexClassLoader
+               * (without hooking `BaseDexClassLoader.findClass` which is called thousands of times per second and freezes splash screen!).
+               * Also NEVER hooks `o.setLocaleList` (which is a hot VM dispatch loop)!
+               * Hooks ONLY `o.setFontWeight.serializer` and `o.ewG.serializer` — 100% identical to 1Shot.apk!
                */
-              public static void tryHookLateIntegrityClasses(ClassLoader cl) {
+              public static void onNewDexClassLoaderCreated(ClassLoader cl) {
                   if (cl == null) return;
-                  sKnownClassLoaders.add(cl);
-                  String[][] targets = {
-                      {"o.setFontWeight", "serializer", "0"},
-                      {"o.ewG", "serializer", "0"},
-                      {"o.setLocaleList", "serializer", "7"},
-                      {"o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds", "serializer", "7"},
-                      {"o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", "7"}
-                  };
-                  for (String[] item : targets) {
-                      String cn = item[0];
-                      String targetMethod = item[1];
-                      int hookKind = Integer.parseInt(item[2]);
+                  String[] targets = {"o.setFontWeight", "o.ewG"};
+                  for (String cn : targets) {
                       if (sHookedClasses.contains(cn)) continue;
                       try {
                           Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
                           if (cls != null) {
-                              hookTargetMethodOnClass(cls, targetMethod, hookKind);
+                              hookExact1ShotSerializer(cls);
                           }
                       } catch (Throwable ignored) {
                       }
                   }
               }
 
-              public static synchronized void hookTargetMethodOnClass(Class<?> cls, String targetMethod, int hookKind) {
+              public static synchronized void hookExact1ShotSerializer(Class<?> cls) {
                   if (cls == null) return;
                   String cn = cls.getName();
                   if (sHookedClasses.contains(cn)) return;
@@ -312,18 +290,18 @@ jobs:
                       StringBuilder sigs = new StringBuilder();
                       int count = 0;
                       for (Method m : methods) {
-                          if (targetMethod == null || targetMethod.equals(m.getName())) {
+                          if ("serializer".equals(m.getName())) {
                               if (sigs.length() > 0) sigs.append("; ");
                               sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
                                   .append("->").append(m.getReturnType().getSimpleName());
-                              XposedBridge.hookMethod(m, new a(hookKind));
+                              XposedBridge.hookMethod(m, new a(0));
                               count++;
                           }
                       }
-                      log("DEX-GUARD", "Hooked secondary-DEX class " + cn + " (" + count + " methods): " + sigs
+                      log("DEX-GUARD", "1Shot Exact Hook attached to " + cn + " (" + count + " methods): " + sigs
                           + " | loader=" + cls.getClassLoader().getClass().getName());
                   } catch (Throwable t) {
-                      logError("HookMethod_" + cn, t);
+                      logError("Hook1Shot_" + cn, t);
                   }
               }
 
@@ -383,32 +361,16 @@ jobs:
                   this.f1994a = i3;
               }
 
-              private static void setSafeNullOrDefault(XC_MethodHook.MethodHookParam param) {
-                  Class<?> retType = (param.method instanceof Method)
-                      ? ((Method) param.method).getReturnType() : Object.class;
-                  if (retType == boolean.class) {
-                      param.setResult(Boolean.FALSE);
-                  } else if (retType == int.class) {
-                      param.setResult(0);
-                  } else if (retType == long.class) {
-                      param.setResult(0L);
-                  } else {
-                      // Exact 1Shot.apk line: methodHookParam.setResult((Object) null);
-                      param.setResult(null);
-                  }
-              }
-
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // Exact 1Shot.apk equivalent: o.setFontWeight.serializer / o.ewG.serializer -> null!
+                      case 0: // 100% Exact 1Shot.apk equivalent: o.setFontWeight.serializer / o.ewG.serializer -> setResult(null)!
                           if (!b.sOptIntegrityBypass) return;
-                          String clsName = methodHookParam.method.getDeclaringClass().getName();
-                          String mName = methodHookParam.method.getName();
-                          int argLen = methodHookParam.args != null ? methodHookParam.args.length : 0;
-                          setSafeNullOrDefault(methodHookParam);
-                          c.log("BYPASS", "1Shot Exact Bypass: " + clsName + "." + mName + "(args=" + argLen + ") -> null | caller=" + c.getCallerInfo());
+                          // Exact 1Shot.apk line: methodHookParam.setResult((Object) null);
+                          methodHookParam.setResult(null);
+                          c.log("BYPASS", "1Shot Exact Bypass: " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName() + " -> null (no root crash!)");
                           return;
 
                       case 2: // Location.isMock / isFromMockProvider
@@ -425,13 +387,8 @@ jobs:
                           return;
 
                       case 4: // verifyRootIntegrity$1.invokeSuspend
-                          if (methodHookParam.thisObject != null) {
-                              c.registerClassLoader(methodHookParam.thisObject.getClass().getClassLoader());
-                          }
-                          c.sweepAllKnownClassLoaders();
-                          return;
-
                       case 5: // o.x5.serializer tracer
+                      case 9: // BaseDexClassLoader.<init> constructor hook (runs only ~2 times on startup, zero lag!)
                           return;
 
                       case 6: // Obfuscated boolean root-check helpers (o.notifyChildren... / o.setCustomAttributeArray)
@@ -444,18 +401,6 @@ jobs:
                                   + methodHookParam.method.getDeclaringClass().getName() + "."
                                   + methodHookParam.method.getName() + " -> false | caller=" + c.getCallerInfo());
                           }
-                          return;
-
-                      case 7: // o.setLocaleList.serializer OR o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer OR o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer
-                          if (methodHookParam.thisObject != null) {
-                              c.registerClassLoader(methodHookParam.thisObject.getClass().getClassLoader());
-                          }
-                          c.registerClassLoader(methodHookParam.method.getDeclaringClass().getClassLoader());
-                          c.sweepAllKnownClassLoaders();
-                          return;
-
-                      case 8: // BaseDexClassLoader.findClass(String) - NOT @CallerSensitive!
-                      case 9: // BaseDexClassLoader.<init> constructor hook!
                           return;
 
                       default: // InstallSourceInfo package name methods (case 1)
@@ -491,40 +436,11 @@ jobs:
                       Throwable t = methodHookParam.getThrowable();
                       c.log("X5-TRACE", "o.x5." + methodHookParam.method.getName() + "(" + argsStr + ") -> result="
                           + String.valueOf(res) + (t != null ? " throwable=" + t : "") + " | caller=" + c.getCallerInfo());
-                  } else if (this.f1994a == 7) {
-                      String clsName = methodHookParam.method.getDeclaringClass().getName();
-                      String mName = methodHookParam.method.getName();
-                      Throwable t = methodHookParam.getThrowable();
-                      if (t != null && b.sOptIntegrityBypass) {
-                          c.log("BYPASS", "Caught & suppressed root-guard exception inside " + clsName + "." + mName
-                              + " (" + t.getClass().getSimpleName() + ") -> normal return! | top=" + c.formatTopStack(t, 3));
-                          setSafeNullOrDefault(methodHookParam);
-                      } else {
-                          c.log("DEX-GUARD", "Guard method " + clsName + "." + mName + " finished cleanly -> result="
-                              + String.valueOf(methodHookParam.getResult()));
-                      }
-                  } else if (this.f1994a == 8) {
-                      // BaseDexClassLoader.findClass(String) afterHookedMethod
-                      if (methodHookParam.thisObject instanceof ClassLoader) {
-                          c.registerClassLoader((ClassLoader) methodHookParam.thisObject);
-                      }
-                      Object res = methodHookParam.getResult();
-                      if (res instanceof Class<?>) {
-                          Class<?> cls = (Class<?>) res;
-                          String cn = cls.getName();
-                          if ("o.setFontWeight".equals(cn) || "o.ewG".equals(cn)) {
-                              c.hookTargetMethodOnClass(cls, "serializer", 0);
-                          } else if ("o.setLocaleList".equals(cn) || "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds".equals(cn)) {
-                              c.hookTargetMethodOnClass(cls, "serializer", 7);
-                          } else if ("o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs".equals(cn)) {
-                              c.hookTargetMethodOnClass(cls, "IconCompatParcelizer", 7);
-                          }
-                      }
                   } else if (this.f1994a == 9) {
-                      // BaseDexClassLoader constructor finished! Register this new secondary DEX ClassLoader!
+                      // BaseDexClassLoader constructor finished! Immediately check if this new InMemoryDexClassLoader
+                      // contains o.setFontWeight (or o.ewG) and hook ONLY its serializer() method!
                       if (methodHookParam.thisObject instanceof ClassLoader) {
-                          ClassLoader newCl = (ClassLoader) methodHookParam.thisObject;
-                          c.registerClassLoader(newCl);
+                          c.onNewDexClassLoaderCreated((ClassLoader) methodHookParam.thisObject);
                       }
                   }
               }
@@ -809,7 +725,7 @@ jobs:
                               saveProfileToLocalProp(sDataDir);
                               syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v3.2: " + sBrand + " / " + sModel);
+                              c.log("PREFS", "Synced settings & profile from HS Panel v3.3: " + sBrand + " / " + sModel);
                           }
                       }
                   } catch (Throwable ignored) {
@@ -1185,7 +1101,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v3.2 into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v3.3 into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " realModel=" + Build.MODEL);
@@ -1205,19 +1121,18 @@ jobs:
                       c.logError("CrashHook", t);
                   }
 
-                  // 1. Hook BaseDexClassLoader constructors & findClass(String) - NOT @CallerSensitive!
-                  //    Whenever any InMemoryDexClassLoader or DexClassLoader is created or loads a class,
-                  //    we capture that ClassLoader and hook o.setFontWeight.serializer & o.setLocaleList.serializer!
+                  // 1. Hook ONLY BaseDexClassLoader constructors (NOT findClass!)
+                  //    When InMemoryDexClassLoader is created at startup (~200ms), we immediately find and hook
+                  //    ONLY o.setFontWeight.serializer(Object[]) -> void with zero runtime overhead!
                   try {
                       XposedBridge.hookAllConstructors(BaseDexClassLoader.class, new a(9));
-                      XposedHelpers.findAndHookMethod(BaseDexClassLoader.class, "findClass", String.class, new a(8));
-                      c.log("HOOK-OK", "Hooked BaseDexClassLoader.<init> & findClass for secondary DEX detection");
+                      c.log("HOOK-OK", "Hooked BaseDexClassLoader.<init> for instant InMemoryDexClassLoader capture");
                   } catch (Throwable t) {
                       c.logError("BaseDexHook", t);
                   }
 
-                  // 2. Register main ClassLoader and check if Guard classes are already present
-                  c.registerClassLoader(cl);
+                  // 2. Also check main ClassLoader just in case
+                  c.onNewDexClassLoaderCreated(cl);
 
                   // 3. Hook HungerStation v4.2643.1+ obfuscated boolean root-check methods ONLY
                   inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 6, false);
@@ -1418,7 +1333,7 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Panel v3.2 in LSPosed for HungerStation." + NL
+                      + "1. Enable HS Panel v3.3 in LSPosed for HungerStation." + NL
                       + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
@@ -1704,7 +1619,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Panel v3.2 - Control &amp; Logs"
+                  android:text="HS Panel v3.3 - Control &amp; Logs"
                   android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
@@ -1954,7 +1869,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Panel v3.2</string>
+              <string name="app_name">HS Panel v3.3</string>
           </resources>
           EOF
 
@@ -2005,7 +1920,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Panel v3.2 (Clean FakeProcess + NPE Fix + 1Shot Hybrid)" />
+                      android:value="HS Panel v3.3 (Clean FakeProcess + NPE Fix + 1Shot Hybrid)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -2079,7 +1994,7 @@ jobs:
                   minSdk 30
                   targetSdk 34
                   versionCode 10
-                  versionName "3.2"
+                  versionName "3.3"
               }
 
               signingConfigs {
@@ -2117,12 +2032,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v3.2.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v3.3.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v3.2-APK
-          path: output/HS-Panel-v3.2.apk
+          name: HS-Panel-v3.3-APK
+          path: output/HS-Panel-v3.3.apk
           if-no-files-found: error
