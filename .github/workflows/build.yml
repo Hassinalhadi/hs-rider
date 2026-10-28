@@ -1010,14 +1010,12 @@ jobs:
                   if (this.f1995a == 1) { // Re-apply Build spoof in Application.onCreate afterHookedMethod (exact 1Shot timing)
                       ClassLoader cl = (ClassLoader) this.f1996b;
                       applyBuildSpoof(cl);
-                      c.registerClassLoader(cl);
-                      c.sweepAllKnownClassLoaders();
+                      c.onNewDexClassLoaderCreated(cl);
                   } else if (this.f1995a == 7) { // Activity.onResume
                       if (methodHookParam.thisObject instanceof Activity) {
                           Activity act = (Activity) methodHookParam.thisObject;
                           c.setTargetContext(act);
-                          c.registerClassLoader(act.getClassLoader());
-                          c.sweepAllKnownClassLoaders();
+                          c.onNewDexClassLoaderCreated(act.getClassLoader());
                           c.log("ACTIVITY", "Opened screen: " + act.getClass().getName());
                       }
                   } else if (this.f1995a == 12) { // TextView.setText - Trace IAL403 / Unauthorized error origin
