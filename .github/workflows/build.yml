@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation & Real Exec)
+    name: Build Signed HS Panel v4.0 (OkHttp Order & Request Fix + IAL403 Deep Bypass + Real UNIXProcess)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v3.6 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v4.0 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -49,6 +49,7 @@ jobs:
           cp -r /tmp/res_backup/* app/src/main/res/ 2>/dev/null || true
           mkdir -p app/src/main/res/values app/src/main/res/layout app/src/main/res/drawable app/src/main/res/xml
           echo "com.logistics.rider.lsposed.xposed.XposedInit" > app/src/main/assets/xposed_init
+
           cat << 'EOF' > app/src/main/java/h2/a.java
           package h2;
 
@@ -122,31 +123,669 @@ jobs:
               }
 
               public static String extractBuildIdFromFingerprint(String fp) {
-                  if (fp == null) return null;
+                  if (fp == null) return "UP1A.231005.007";
                   int colonIdx = fp.indexOf(':');
-                  if (colonIdx < 0) return null;
+                  if (colonIdx < 0) return "UP1A.231005.007";
                   int firstSlash = fp.indexOf('/', colonIdx);
-                  if (firstSlash < 0) return null;
+                  if (firstSlash < 0) return "UP1A.231005.007";
                   int secondSlash = fp.indexOf('/', firstSlash + 1);
                   if (secondSlash > firstSlash + 1) {
                       return fp.substring(firstSlash + 1, secondSlash);
                   }
-                  return null;
+                  return "UP1A.231005.007";
               }
 
               public static String extractIncrementalFromFingerprint(String fp) {
-                  if (fp == null) return null;
+                  if (fp == null) return "S928BXXU1AWL5";
                   int colonIdx = fp.indexOf(':');
-                  if (colonIdx < 0) return null;
+                  if (colonIdx < 0) return "S928BXXU1AWL5";
                   int firstSlash = fp.indexOf('/', colonIdx);
-                  if (firstSlash < 0) return null;
+                  if (firstSlash < 0) return "S928BXXU1AWL5";
                   int secondSlash = fp.indexOf('/', firstSlash + 1);
-                  if (secondSlash < 0) return null;
+                  if (secondSlash < 0) return "S928BXXU1AWL5";
                   int secondColon = fp.indexOf(':', secondSlash + 1);
                   if (secondColon > secondSlash + 1) {
                       return fp.substring(secondSlash + 1, secondColon);
                   }
+                  return "S928BXXU1AWL5";
+              }
+
+              public static String buildDalvikUserAgent(String model, String buildId) {
+                  String rel = Build.VERSION.RELEASE != null ? Build.VERSION.RELEASE : "14";
+                  String m = (model != null && !model.isEmpty()) ? model : "SM-S928B";
+                  String id = (buildId != null && !buildId.isEmpty()) ? buildId : "UP1A.231005.007";
+                  return "Dalvik/2.1.0 (Linux; U; Android " + rel + "; " + m + " Build/" + id + ")";
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/i2/d.java
+          package i2;
+
+          import android.app.Activity;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.TextView;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+          import java.lang.reflect.Constructor;
+          import java.lang.reflect.Field;
+          import java.lang.reflect.Method;
+          import java.lang.reflect.Modifier;
+          import java.nio.charset.StandardCharsets;
+          import java.util.Collections;
+          import java.util.LinkedHashMap;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.concurrent.ConcurrentHashMap;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+          import java.util.regex.Matcher;
+          import java.util.regex.Pattern;
+
+          /**
+           * OkHttp Engine (محرك ميزة OkHttp لإصلاح طلبات الشبكة والموافقة التلقائية على الطلبات):
+           * 1. Hooks obfuscated & standard OkHttp RealInterceptorChain.proceed (o.insertOrIgnoreItem.write)
+           *    and Header Interceptors (o.getOpeningAnimation).
+           * 2. Sanitizes outgoing Request headers in-place (String[] namesAndValues) so no real Motorola/device
+           *    identifiers leak via User-Agent or X-Device-* headers.
+           * 3. Captures live Authorization Bearer tokens, XX-Request-Token, Log-Employee-User, and OkHttpClient/Chain
+           *    instances across ClassLoaders.
+           * 4. Automatically retries order-approval / dispatch / login requests inside OkHttp on transient 429/5xx errors.
+           * 5. Detects incoming order/dispatch offers in OkHttp responses and auto-approves them via OkHttp + UI backup.
+           */
+          public final class d {
+              private static final Set<String> sHookedOkHttpTargets = ConcurrentHashMap.newKeySet();
+              private static final Set<String> sLoggedRequestKeys = Collections.newSetFromMap(
+                  new LinkedHashMap<String, Boolean>(256, 0.75f, true) {
+                      @Override
+                      protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                          return size() > 200;
+                      }
+                  }
+              );
+              private static final Set<String> sAutoAcceptedOrderIds = ConcurrentHashMap.newKeySet();
+              private static final ExecutorService sOkHttpOrderExecutor = Executors.newSingleThreadExecutor();
+              private static final Handler sMainHandler = new Handler(Looper.getMainLooper());
+
+              public static volatile String sLastAuthToken = null;
+              public static volatile String sLastRequestToken = null;
+              public static volatile String sLastEmployeeHash = null;
+              public static volatile String sLastBaseUrl = "https://sa.usehurrier.com";
+              public static volatile Object sLastOkHttpClient = null;
+              public static volatile ClassLoader sAppClassLoader = null;
+
+              private static final ThreadLocal<Boolean> sInOkHttpHook = new ThreadLocal<Boolean>() {
+                  @Override
+                  protected Boolean initialValue() {
+                      return Boolean.FALSE;
+                  }
+              };
+
+              private static final ThreadLocal<Boolean> sInRetryProceed = new ThreadLocal<Boolean>() {
+                  @Override
+                  protected Boolean initialValue() {
+                      return Boolean.FALSE;
+                  }
+              };
+
+              private static final Pattern ORDER_ID_PATTERN = Pattern.compile(
+                  "\"(?:offer_id|dispatch_id|order_id|assignment_id|delivery_id|task_id)\"\\s*:\\s*\"?([A-Za-z0-9_\\-]{4,64})\"?"
+              );
+              private static final Pattern ACCEPT_URL_PATTERN = Pattern.compile(
+                  "\"(?:accept_url|acceptance_url|approve_url|action_url)\"\\s*:\\s*\"(https?://[^\"]+|/api/[^\"]+)\""
+              );
+
+              public static synchronized void hookOkHttpInClassLoader(ClassLoader cl) {
+                  if (cl == null) return;
+                  sAppClassLoader = cl;
+
+                  // 1. Hook obfuscated OkHttp RealInterceptorChain.proceed: o.insertOrIgnoreItem.write(Request) -> Response
+                  String[] chainCandidates = {
+                      "o.insertOrIgnoreItem",
+                      "okhttp3.internal.http.RealInterceptorChain"
+                  };
+                  for (String chainCn : chainCandidates) {
+                      String key = cl.hashCode() + "#" + chainCn;
+                      if (sHookedOkHttpTargets.contains(key)) continue;
+                      try {
+                          Class<?> chainCls = XposedHelpers.findClassIfExists(chainCn, cl);
+                          if (chainCls == null) continue;
+                          sHookedOkHttpTargets.add(key);
+                          int hookedCount = 0;
+                          for (Method m : chainCls.getDeclaredMethods()) {
+                              if (m.getParameterTypes().length == 1
+                                      && m.getReturnType() != void.class
+                                      && m.getReturnType() != int.class
+                                      && m.getReturnType() != boolean.class
+                                      && ("write".equals(m.getName()) || "proceed".equals(m.getName()))) {
+                                  XposedBridge.hookMethod(m, new XC_MethodHook() {
+                                      @Override
+                                      protected void beforeHookedMethod(MethodHookParam param) {
+                                          if (!b.sOptMaster || !b.sOptOkHttpFix) return;
+                                          if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                                              beforeProceed(param.thisObject, param.args[0]);
+                                          }
+                                      }
+
+                                      @Override
+                                      protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                                          if (!b.sOptMaster) return;
+                                          Object req = (param.args != null && param.args.length > 0) ? param.args[0] : null;
+                                          Object res = param.getResult();
+                                          Throwable err = param.getThrowable();
+                                          afterProceed(param, param.thisObject, req, res, err);
+                                      }
+                                  });
+                                  hookedCount++;
+                              }
+                          }
+                          if (hookedCount > 0) {
+                              c.log("OKHTTP-HOOK", "Hooked OkHttp RealInterceptorChain (" + chainCn + ", " + hookedCount + " proceed methods)");
+                          }
+                      } catch (Throwable t) {
+                          c.logError("HookOkHttp_" + chainCn, t);
+                      }
+                  }
+
+                  // 2. Hook HungerStation Header Interceptor (o.getOpeningAnimation) if present
+                  String hdrIntKey = cl.hashCode() + "#o.getOpeningAnimation";
+                  if (!sHookedOkHttpTargets.contains(hdrIntKey)) {
+                      try {
+                          Class<?> hdrCls = XposedHelpers.findClassIfExists("o.getOpeningAnimation", cl);
+                          if (hdrCls != null) {
+                              sHookedOkHttpTargets.add(hdrIntKey);
+                              for (Method m : hdrCls.getDeclaredMethods()) {
+                                  if (m.getParameterTypes().length == 1 && m.getReturnType() != void.class) {
+                                      XposedBridge.hookMethod(m, new XC_MethodHook() {
+                                          @Override
+                                          protected void beforeHookedMethod(MethodHookParam param) {
+                                              if (b.sOptMaster && b.sOptDeviceSpoof) {
+                                                  b.applyBuildSpoof(cl);
+                                              }
+                                          }
+                                      });
+                                  }
+                              }
+                              c.log("OKHTTP-HOOK", "Hooked OkHttp Header Interceptor (o.getOpeningAnimation)");
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                  }
+              }
+
+              private static Object getFieldVal(Object obj, String fieldName) {
+                  if (obj == null || fieldName == null) return null;
+                  Class<?> cls = obj.getClass();
+                  while (cls != null && cls != Object.class) {
+                      try {
+                          Field f = cls.getDeclaredField(fieldName);
+                          f.setAccessible(true);
+                          return f.get(obj);
+                      } catch (NoSuchFieldException ignored) {
+                          cls = cls.getSuperclass();
+                      } catch (Throwable ignored) {
+                          break;
+                      }
+                  }
                   return null;
+              }
+
+              private static String[] extractHeadersArray(Object headersObj) {
+                  if (headersObj == null) return null;
+                  try {
+                      for (Field f : headersObj.getClass().getDeclaredFields()) {
+                          if (f.getType() == String[].class) {
+                              f.setAccessible(true);
+                              return (String[]) f.get(headersObj);
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return null;
+              }
+
+              private static String formatHeadersFull(Object headersObj) {
+                  if (headersObj == null) return "";
+                  String[] nv = extractHeadersArray(headersObj);
+                  if (nv != null && nv.length >= 2) {
+                      StringBuilder sb = new StringBuilder("[");
+                      for (int i = 0; i + 1 < nv.length; i += 2) {
+                          if (i > 0) sb.append(", ");
+                          sb.append(nv[i]).append(": ").append(nv[i + 1]);
+                      }
+                      sb.append("]");
+                      return sb.toString();
+                  }
+                  return String.valueOf(headersObj).replace("\n", " | ").replace("\r", "");
+              }
+
+              private static String readRequestBodyString(Object reqObj) {
+                  if (reqObj == null) return null;
+                  try {
+                      Object bodyObj = getFieldVal(reqObj, "body");
+                      if (bodyObj == null) return null;
+                      for (Field f : bodyObj.getClass().getDeclaredFields()) {
+                          if (f.getType() == byte[].class) {
+                              f.setAccessible(true);
+                              byte[] bytes = (byte[]) f.get(bodyObj);
+                              if (bytes != null && bytes.length > 0) {
+                                  int len = Math.min(bytes.length, 4096);
+                                  return new String(bytes, 0, len, StandardCharsets.UTF_8);
+                              }
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return null;
+              }
+
+              private static String peekResponseBodySafe(Object resObj) {
+                  if (resObj == null) return null;
+                  try {
+                      Object bodyObj = getFieldVal(resObj, "body");
+                      if (bodyObj == null) return null;
+
+                      Object sourceObj = null;
+                      for (Field f : bodyObj.getClass().getDeclaredFields()) {
+                          if (!f.getType().isPrimitive() && f.getType() != String.class) {
+                              f.setAccessible(true);
+                              Object v = f.get(bodyObj);
+                              if (v != null) {
+                                  sourceObj = v;
+                                  break;
+                              }
+                          }
+                      }
+                      if (sourceObj == null) {
+                          for (Method m : bodyObj.getClass().getDeclaredMethods()) {
+                              if (m.getParameterTypes().length == 0 && !m.getReturnType().isPrimitive()
+                                      && m.getReturnType() != String.class && m.getReturnType() != Object.class) {
+                                  m.setAccessible(true);
+                                  sourceObj = m.invoke(bodyObj);
+                                  if (sourceObj != null) break;
+                              }
+                          }
+                      }
+                      if (sourceObj == null) return null;
+
+                      for (Method m : sourceObj.getClass().getMethods()) {
+                          if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0] == long.class
+                                  && m.getReturnType() == boolean.class) {
+                              try {
+                                  m.setAccessible(true);
+                                  m.invoke(sourceObj, 32768L);
+                                  break;
+                              } catch (Throwable ignored) {
+                              }
+                          }
+                      }
+
+                      Object bufferObj = null;
+                      if (sourceObj instanceof Cloneable) {
+                          bufferObj = sourceObj;
+                      } else {
+                          for (Field f : sourceObj.getClass().getDeclaredFields()) {
+                              f.setAccessible(true);
+                              Object v = f.get(sourceObj);
+                              if (v instanceof Cloneable) {
+                                  bufferObj = v;
+                                  break;
+                              }
+                          }
+                      }
+                      if (bufferObj == null) return null;
+
+                      Method cloneMethod = bufferObj.getClass().getMethod("clone");
+                      cloneMethod.setAccessible(true);
+                      Object clonedBuffer = cloneMethod.invoke(bufferObj);
+                      if (clonedBuffer == null || clonedBuffer == bufferObj) return null;
+
+                      for (Method m : clonedBuffer.getClass().getMethods()) {
+                          if (m.getParameterTypes().length == 0 && m.getReturnType() == byte[].class) {
+                              m.setAccessible(true);
+                              byte[] bytes = (byte[]) m.invoke(clonedBuffer);
+                              if (bytes != null && bytes.length > 0) {
+                                  int len = Math.min(bytes.length, 4096);
+                                  return new String(bytes, 0, len, StandardCharsets.UTF_8);
+                              }
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+                  return null;
+              }
+
+              private static String sanitizeHeaderValue(String headerName, String val) {
+                  if (val == null || val.isEmpty() || !b.sOptDeviceSpoof || b.sModel == null) return val;
+                  String out = val;
+                  if (b.sRealModel != null && !b.sRealModel.isEmpty() && !b.sRealModel.equals(b.sModel) && out.contains(b.sRealModel)) {
+                      out = out.replace(b.sRealModel, b.sModel);
+                  }
+                  if (b.sRealBrand != null && !b.sRealBrand.isEmpty() && !b.sRealBrand.equalsIgnoreCase(b.sBrand)) {
+                      out = out.replace(b.sRealBrand, b.sBrand);
+                  }
+                  if (b.sRealManufacturer != null && !b.sRealManufacturer.isEmpty() && !b.sRealManufacturer.equalsIgnoreCase(b.sManufacturer)) {
+                      out = out.replace(b.sRealManufacturer, b.sManufacturer);
+                  }
+                  if (b.sRealDevice != null && !b.sRealDevice.isEmpty() && !b.sRealDevice.equals(b.sDevice) && out.contains(b.sRealDevice)) {
+                      out = out.replace(b.sRealDevice, b.sDevice);
+                  }
+                  if (b.sRealBuildId != null && !b.sRealBuildId.isEmpty() && b.sBuildId != null && !b.sRealBuildId.equals(b.sBuildId) && out.contains(b.sRealBuildId)) {
+                      out = out.replace(b.sRealBuildId, b.sBuildId);
+                  }
+                  if (out.toLowerCase(Locale.US).contains("motorola") && b.sBrand != null && !b.sBrand.equalsIgnoreCase("motorola")) {
+                      out = out.replace("Motorola", b.sBrand).replace("motorola", b.sBrand);
+                  }
+                  return out;
+              }
+
+              private static boolean isOrderApprovalOrDispatchUrl(String url) {
+                  if (url == null) return false;
+                  String u = url.toLowerCase(Locale.US);
+                  return u.contains("/accept") || u.contains("/acknowledge") || u.contains("/confirm")
+                      || u.contains("/assign") || u.contains("/orders") || u.contains("/dispatches")
+                      || u.contains("/offers") || u.contains("/deliveries") || u.contains("/tasks")
+                      || u.contains("/deliver") || u.contains("/pickup");
+              }
+
+              private static void captureClientFromChain(Object chainObj) {
+                  if (chainObj == null || sLastOkHttpClient != null) return;
+                  try {
+                      for (Field f : chainObj.getClass().getDeclaredFields()) {
+                          f.setAccessible(true);
+                          Object callCandidate = f.get(chainObj);
+                          if (callCandidate == null || callCandidate.getClass().isPrimitive() || callCandidate instanceof String || callCandidate instanceof List) {
+                              continue;
+                          }
+                          for (Field cf : callCandidate.getClass().getDeclaredFields()) {
+                              cf.setAccessible(true);
+                              Object clientCandidate = cf.get(callCandidate);
+                              if (clientCandidate != null && !clientCandidate.getClass().isPrimitive()
+                                      && !(clientCandidate instanceof String)) {
+                                  for (Method m : clientCandidate.getClass().getDeclaredMethods()) {
+                                      if (m.getParameterTypes().length == 1
+                                              && "o.getDetails".equals(m.getParameterTypes()[0].getName())) {
+                                          sLastOkHttpClient = clientCandidate;
+                                          c.log("OKHTTP-HOOK", "Captured live HungerStation OkHttpClient (" + clientCandidate.getClass().getName() + ")");
+                                          return;
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              private static void beforeProceed(Object chainObj, Object reqObj) {
+                  try {
+                      captureClientFromChain(chainObj);
+
+                      Object urlObj = getFieldVal(reqObj, "url");
+                      String url = urlObj != null ? String.valueOf(urlObj) : "";
+                      String method = String.valueOf(getFieldVal(reqObj, "method"));
+                      Object headersObj = getFieldVal(reqObj, "headers");
+
+                      if (url.startsWith("https://") && url.contains("usehurrier.com")) {
+                          int slashIdx = url.indexOf('/', 8);
+                          if (slashIdx > 8) {
+                              sLastBaseUrl = url.substring(0, slashIdx);
+                          }
+                      }
+
+                      String[] nv = extractHeadersArray(headersObj);
+                      if (nv != null && nv.length >= 2) {
+                          for (int i = 0; i + 1 < nv.length; i += 2) {
+                              String hName = nv[i];
+                              String hVal = nv[i + 1];
+                              if (hName == null || hVal == null) continue;
+
+                              if ("Authorization".equalsIgnoreCase(hName) && !hVal.isEmpty()) {
+                                  sLastAuthToken = hVal;
+                              } else if ("XX-Request-Token".equalsIgnoreCase(hName) && !hVal.isEmpty()) {
+                                  sLastRequestToken = hVal;
+                              } else if ("Log-Employee-User".equalsIgnoreCase(hName) && !hVal.isEmpty()) {
+                                  sLastEmployeeHash = hVal;
+                              }
+
+                              String sanitized = sanitizeHeaderValue(hName, hVal);
+                              if (!sanitized.equals(hVal)) {
+                                  nv[i + 1] = sanitized;
+                                  c.log("OKHTTP-FIX", "Sanitized leaked device info in header [" + hName + "]: " + sanitized);
+                              }
+                          }
+                      }
+
+                      if (isOrderApprovalOrDispatchUrl(url) && ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method))) {
+                          c.log("OKHTTP-ACCEPT", "Order/Dispatch Action Request via OkHttp: " + method + " " + url);
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              private static void afterProceed(XC_MethodHook.MethodHookParam param, Object chainObj, Object reqObj, Object resObj, Throwable err) throws Throwable {
+                  if (sInOkHttpHook.get()) return;
+                  sInOkHttpHook.set(Boolean.TRUE);
+                  try {
+                      Object finalReq = resObj != null ? getFieldVal(resObj, "request") : reqObj;
+                      if (finalReq == null) finalReq = reqObj;
+                      String url = finalReq != null ? String.valueOf(getFieldVal(finalReq, "url")) : "";
+                      String method = finalReq != null ? String.valueOf(getFieldVal(finalReq, "method")) : "";
+
+                      int statusCode = -1;
+                      if (resObj != null) {
+                          Object codeObj = getFieldVal(resObj, "code");
+                          if (codeObj instanceof Integer) {
+                              statusCode = (Integer) codeObj;
+                          }
+                      }
+
+                      if (b.sOptOkHttpFix && !sInRetryProceed.get() && isOrderApprovalOrDispatchUrl(url)
+                              && ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method))) {
+                          if (err != null || statusCode == 429 || (statusCode >= 500 && statusCode <= 599)) {
+                              sInRetryProceed.set(Boolean.TRUE);
+                              try {
+                                  c.log("OKHTTP-ACCEPT", "Retrying Order Approval Request via OkHttp (" + method + " " + url
+                                      + ", prevStatus=" + statusCode + ")...");
+                                  Object retryRes = XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
+                                  if (retryRes != null) {
+                                      param.setResult(retryRes);
+                                      resObj = retryRes;
+                                      Object newCode = getFieldVal(retryRes, "code");
+                                      if (newCode instanceof Integer) statusCode = (Integer) newCode;
+                                      c.log("OKHTTP-ACCEPT", "OkHttp Retry completed -> HTTP " + statusCode + " for " + url);
+                                  }
+                              } catch (Throwable retryErr) {
+                                  c.log("OKHTTP-ACCEPT", "OkHttp Retry exception: " + retryErr.getClass().getSimpleName());
+                              } finally {
+                                  sInRetryProceed.set(Boolean.FALSE);
+                              }
+                          }
+                      }
+
+                      Object sentMillisObj = resObj != null ? getFieldVal(resObj, "sentRequestAtMillis") : null;
+                      long sentMillis = (sentMillisObj instanceof Long) ? (Long) sentMillisObj : 0L;
+                      if (url.startsWith("http://localhost")) {
+                          return;
+                      }
+                      String dedupKey = method + ":" + url + ":" + sentMillis + ":" + statusCode;
+                      synchronized (sLoggedRequestKeys) {
+                          if (sentMillis != 0L && sLoggedRequestKeys.contains(dedupKey)) {
+                              return;
+                          }
+                          if (sentMillis != 0L) {
+                              sLoggedRequestKeys.add(dedupKey);
+                          }
+                      }
+
+                      String bodyPreview = null;
+                      if (resObj != null && (statusCode >= 400 || isOrderApprovalOrDispatchUrl(url) || url.contains("/iam-login/"))) {
+                          bodyPreview = peekResponseBodySafe(resObj);
+                      }
+
+                      if (statusCode >= 400) {
+                          String reqHeaders = finalReq != null ? formatHeadersFull(getFieldVal(finalReq, "headers")) : "[]";
+                          String resHeaders = formatHeadersFull(getFieldVal(resObj, "headers"));
+                          String reqBody = readRequestBodyString(finalReq);
+                          c.log("HTTP-ERR-BODY", "HTTP " + statusCode + " " + method + " " + url
+                              + " | reqHeaders=" + reqHeaders
+                              + (reqBody != null ? " | reqBody=" + reqBody : "")
+                              + " | resHeaders=" + resHeaders
+                              + (bodyPreview != null ? " | resBody=" + bodyPreview : ""));
+                      } else if (statusCode >= 200 && statusCode < 300) {
+                          if (url.contains("/iam-login/v2/auth")) {
+                              c.log("OKHTTP-FIX", "Login Auth Succeeded (HTTP " + statusCode + ") via OkHttp: " + url);
+                          } else if (isOrderApprovalOrDispatchUrl(url)) {
+                              c.log("OKHTTP-ORDER", "HTTP " + statusCode + " " + method + " " + url
+                                  + (bodyPreview != null ? " | body=" + c.formatValueBrief(bodyPreview) : ""));
+                              if (b.sOptOkHttpFix && bodyPreview != null) {
+                                  inspectAndAutoAcceptOrderJson(url, bodyPreview, finalReq);
+                              }
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  } finally {
+                      sInOkHttpHook.set(Boolean.FALSE);
+                  }
+              }
+
+              private static void inspectAndAutoAcceptOrderJson(String sourceUrl, String json, Object templateReq) {
+                  if (json == null || json.isEmpty() || !b.sOptOkHttpFix) return;
+                  try {
+                      String lower = json.toLowerCase(Locale.US);
+                      boolean looksLikeOffer = lower.contains("\"offered\"") || lower.contains("\"pending\"")
+                          || lower.contains("\"waiting_acceptance\"") || lower.contains("\"assigned\"")
+                          || lower.contains("\"new\"") || lower.contains("\"offer_id\"")
+                          || lower.contains("\"dispatch_id\"") || lower.contains("accept");
+                      if (!looksLikeOffer) return;
+
+                      Matcher urlMatcher = ACCEPT_URL_PATTERN.matcher(json);
+                      if (urlMatcher.find()) {
+                          String acceptEndpoint = urlMatcher.group(1);
+                          if (acceptEndpoint != null && !acceptEndpoint.isEmpty()) {
+                              String fullUrl = acceptEndpoint.startsWith("http")
+                                  ? acceptEndpoint
+                                  : (sLastBaseUrl + (acceptEndpoint.startsWith("/") ? "" : "/") + acceptEndpoint);
+                              if (sAutoAcceptedOrderIds.add("URL:" + fullUrl)) {
+                                  c.log("OKHTTP-ACCEPT", "Auto-accepting order via discovered accept URL: " + fullUrl);
+                                  dispatchAcceptRequestAsync(fullUrl, "{}", templateReq);
+                              }
+                          }
+                      }
+
+                      Matcher idMatcher = ORDER_ID_PATTERN.matcher(json);
+                      while (idMatcher.find()) {
+                          String orderId = idMatcher.group(1);
+                          if (orderId != null && sAutoAcceptedOrderIds.add(orderId)) {
+                              c.log("OKHTTP-ACCEPT", "Detected new order/dispatch ID=" + orderId + " from " + sourceUrl + " -> triggering auto-accept");
+                              triggerUiOrderAcceptIfVisible();
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+
+              private static void dispatchAcceptRequestAsync(final String acceptUrl, final String jsonBody, final Object templateReq) {
+                  sOkHttpOrderExecutor.execute(() -> {
+                      try {
+                          if (sLastOkHttpClient == null || templateReq == null) return;
+                          Class<?> reqCls = templateReq.getClass();
+                          Object urlObj = getFieldVal(templateReq, "url");
+                          if (urlObj == null) return;
+                          Object newHttpUrl = null;
+                          for (Method m : urlObj.getClass().getDeclaredMethods()) {
+                              if (Modifier.isStatic(m.getModifiers())
+                                      && m.getParameterTypes().length == 1
+                                      && m.getParameterTypes()[0] == String.class
+                                      && m.getReturnType() == urlObj.getClass()) {
+                                  m.setAccessible(true);
+                                  newHttpUrl = m.invoke(null, acceptUrl);
+                                  if (newHttpUrl != null) break;
+                              }
+                          }
+                          if (newHttpUrl == null) return;
+
+                          Constructor<?> ctor = reqCls.getDeclaredConstructors()[0];
+                          ctor.setAccessible(true);
+                          Object headersObj = getFieldVal(templateReq, "headers");
+                          Object bodyObj = getFieldVal(templateReq, "body");
+                          Map<?, ?> tagsMap = Collections.emptyMap();
+                          Object newReq = null;
+                          Class<?>[] pTypes = ctor.getParameterTypes();
+                          if (pTypes.length == 5) {
+                              newReq = ctor.newInstance(newHttpUrl, "POST", headersObj, bodyObj, tagsMap);
+                          }
+                          if (newReq != null) {
+                              for (Method m : sLastOkHttpClient.getClass().getDeclaredMethods()) {
+                                  if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0] == reqCls) {
+                                      m.setAccessible(true);
+                                      Object callObj = m.invoke(sLastOkHttpClient, newReq);
+                                      if (callObj != null) {
+                                          for (Method cm : callObj.getClass().getDeclaredMethods()) {
+                                              if (cm.getParameterTypes().length == 0 && cm.getReturnType() != void.class
+                                                      && cm.getReturnType() != boolean.class && cm.getReturnType() != String.class) {
+                                                  cm.setAccessible(true);
+                                                  Object res = cm.invoke(callObj);
+                                                  Object code = getFieldVal(res, "code");
+                                                  c.log("OKHTTP-ACCEPT", "Direct OkHttp Auto-Accept executed for " + acceptUrl + " -> HTTP " + code);
+                                                  break;
+                                              }
+                                          }
+                                      }
+                                      break;
+                                  }
+                              }
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                  });
+              }
+
+              public static void triggerUiOrderAcceptIfVisible() {
+                  if (!b.sOptMaster || !b.sOptOkHttpFix) return;
+                  sMainHandler.postDelayed(() -> {
+                      try {
+                          Activity act = b.sCurrentActivity;
+                          if (act == null || act.isFinishing() || act.getWindow() == null) return;
+                          View root = act.getWindow().getDecorView();
+                          if (root != null) {
+                              scanAndClickAcceptButton(root);
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                  }, 150L);
+              }
+
+              private static boolean scanAndClickAcceptButton(View v) {
+                  if (v == null || v.getVisibility() != View.VISIBLE) return false;
+                  if (v instanceof TextView) {
+                      CharSequence cs = ((TextView) v).getText();
+                      if (cs != null) {
+                          String t = cs.toString().trim().toLowerCase(Locale.US);
+                          if ((t.equals("accept") || t.equals("accept order") || t.equals("قبول")
+                                  || t.equals("موافقة") || t.equals("اقبل") || t.equals("قبول الطلب")
+                                  || t.equals("الموافقة على الطلب")) && v.isEnabled() && v.isClickable()) {
+                              v.performClick();
+                              c.log("OKHTTP-ACCEPT", "Auto-clicked Order Accept button: \"" + cs + "\"");
+                              return true;
+                          }
+                      }
+                  }
+                  if (v instanceof ViewGroup) {
+                      ViewGroup vg = (ViewGroup) v;
+                      for (int i = 0; i < vg.getChildCount(); i++) {
+                          if (scanAndClickAcceptButton(vg.getChildAt(i))) {
+                              return true;
+                          }
+                      }
+                  }
+                  return false;
               }
           }
           EOF
@@ -168,7 +807,6 @@ jobs:
           import java.lang.reflect.Field;
           import java.lang.reflect.Method;
           import java.lang.reflect.Modifier;
-          import java.nio.charset.Charset;
           import java.nio.charset.StandardCharsets;
           import java.text.SimpleDateFormat;
           import java.util.ArrayList;
@@ -184,7 +822,6 @@ jobs:
               private static final List<String> sPendingProviderLines = new ArrayList<>();
               private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
               private static final Set<String> sHookedClasses = ConcurrentHashMap.newKeySet();
-              private static final Set<Integer> sLoggedHttpResHashes = ConcurrentHashMap.newKeySet();
               private static volatile Context sTargetContext;
               public static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
               private static final String NL = String.valueOf((char) 10);
@@ -198,7 +835,7 @@ jobs:
                   }
               }
 
-              private static Context resolveAnyContext() {
+              public static Context resolveAnyContext() {
                   if (sTargetContext != null) return sTargetContext;
                   try {
                       Class<?> atClass = Class.forName("android.app.ActivityThread");
@@ -219,13 +856,10 @@ jobs:
                   boolean isUnlimited = "INIT".equals(tag) || "ERROR".equals(tag) || "CRASH".equals(tag)
                       || "CRASH-GUARD".equals(tag) || "APP-EXIT".equals(tag) || "BYPASS".equals(tag)
                       || "DEX-BYPASS".equals(tag) || "ACTIVITY".equals(tag) || "SPOOF".equals(tag)
-                      || "IAL403".equals(tag) || "IAL403-DETECT".equals(tag) || "HTTP-REQ".equals(tag)
-                      || "HTTP-RES".equals(tag) || "HTTP-ERR-BODY".equals(tag) || "SUPPORT-TRACE".equals(tag)
-                      || "INCOGNIA-TRACE".equals(tag) || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag)
-                      || "DEX-GUARD".equals(tag) || "NPE-TRACE".equals(tag) || "EXEC-FAKE".equals(tag)
-                      || "PKG-SIGN".equals(tag) || "KEYSTORE".equals(tag) || "CERT-HASH".equals(tag)
-                      || "SHA-TRACE".equals(tag);
-                  if (count > 10 && !isUnlimited) {
+                      || "IAL403".equals(tag) || "IAL403-DETECT".equals(tag) || "HTTP-ERR-BODY".equals(tag)
+                      || "OKHTTP-HOOK".equals(tag) || "OKHTTP-FIX".equals(tag) || "OKHTTP-ACCEPT".equals(tag)
+                      || "OKHTTP-ORDER".equals(tag) || "SESSION-SHA".equals(tag) || "HOOK-OK".equals(tag);
+                  if (count > 8 && !isUnlimited) {
                       return;
                   }
                   String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
@@ -255,27 +889,16 @@ jobs:
                   sb.append(where).append(" -> ").append(t.getClass().getName()).append(": ").append(t.getMessage());
                   StackTraceElement[] stack = t.getStackTrace();
                   if (stack != null && stack.length > 0) {
-                      int limit = Math.min(stack.length, 15);
+                      int limit = Math.min(stack.length, 12);
                       for (int i = 0; i < limit; i++) {
                           sb.append(" | at ").append(stack[i].toString());
-                      }
-                  }
-                  Throwable cause = t.getCause();
-                  if (cause != null && cause != t) {
-                      sb.append(" || CAUSED BY: ").append(cause.getClass().getName()).append(": ").append(cause.getMessage());
-                      StackTraceElement[] cstack = cause.getStackTrace();
-                      if (cstack != null) {
-                          int climit = Math.min(cstack.length, 8);
-                          for (int i = 0; i < climit; i++) {
-                              sb.append(" | at ").append(cstack[i].toString());
-                          }
                       }
                   }
                   log("CRASH".equals(where) ? "CRASH" : "ERROR", sb.toString());
               }
 
               public static String getCallerInfo() {
-                  return getCallerInfo(8);
+                  return getCallerInfo(6);
               }
 
               public static String getCallerInfo(int maxFrames) {
@@ -288,14 +911,10 @@ jobs:
                       if (cls.startsWith("java.") || cls.startsWith("android.")
                               || cls.startsWith("dalvik.") || cls.startsWith("de.robv.")
                               || cls.startsWith("org.lsposed.") || cls.startsWith("i2.")
-                              || cls.startsWith("i3.") || cls.startsWith("j3.") || cls.startsWith("h2.b")
                               || cls.startsWith("com.logistics.rider.lsposed")
                               || cls.contains("LspHooker") || cls.contains("XC_MethodHook")
                               || cls.contains("XposedBridge") || cls.contains("HookBridge")
-                              || cls.contains("Vector_")
                               || "intercept".equals(mth) || "proceed".equals(mth)
-                              || "callback".equals(mth) || "invokeOriginalMethod".equals(mth)
-                              || mth.startsWith("handleBefore") || mth.startsWith("handleAfter")
                               || mth.startsWith("callBefore") || mth.startsWith("callAfter")
                               || mth.startsWith("handleHookedMethod")) {
                           continue;
@@ -316,25 +935,17 @@ jobs:
                   int lim = Math.min(stack.length, maxFrames);
                   for (int i = 0; i < lim; i++) {
                       String cls = stack[i].getClassName();
-                      String mth = stack[i].getMethodName();
                       if (cls.startsWith("de.robv.") || cls.startsWith("org.lsposed.") || cls.startsWith("i2.")
-                              || cls.startsWith("i3.") || cls.startsWith("j3.")
-                              || cls.contains("LspHooker") || cls.contains("XposedBridge")
-                              || cls.contains("HookBridge") || cls.contains("Vector_")
-                              || "callback".equals(mth) || "invokeOriginalMethod".equals(mth)) {
+                              || cls.contains("LspHooker")) {
                           continue;
                       }
                       if (sb.length() > 0) sb.append(" <- ");
-                      sb.append(cls).append(".").append(mth).append(":").append(stack[i].getLineNumber());
+                      sb.append(cls).append(".").append(stack[i].getMethodName()).append(":").append(stack[i].getLineNumber());
                   }
                   return sb.toString();
               }
 
               public static String dumpObjectFields(Object obj) {
-                  return dumpObjectFields(obj, 260);
-              }
-
-              public static String dumpObjectFields(Object obj, int maxStrLen) {
                   if (obj == null) return "null";
                   StringBuilder sb = new StringBuilder();
                   Class<?> cls = obj.getClass();
@@ -346,19 +957,8 @@ jobs:
                           f.setAccessible(true);
                           Object val = Modifier.isStatic(f.getModifiers()) ? f.get(null) : f.get(obj);
                           if (count > 0) sb.append(", ");
-                          sb.append(f.getName()).append("=").append(formatValueBrief(val, maxStrLen));
+                          sb.append(f.getName()).append("=").append(formatValueBrief(val));
                           count++;
-                      }
-                      Class<?> sup = cls.getSuperclass();
-                      if (sup != null && sup != Object.class) {
-                          for (Field f : sup.getDeclaredFields()) {
-                              if (Modifier.isStatic(f.getModifiers())) continue;
-                              f.setAccessible(true);
-                              Object val = f.get(obj);
-                              if (count > 0) sb.append(", ");
-                              sb.append("super.").append(f.getName()).append("=").append(formatValueBrief(val, maxStrLen));
-                              count++;
-                          }
                       }
                   } catch (Throwable ignored) {
                   }
@@ -367,29 +967,15 @@ jobs:
               }
 
               public static String formatValueBrief(Object val) {
-                  return formatValueBrief(val, 260);
-              }
-
-              public static String formatValueBrief(Object val, int maxStrLen) {
                   if (val == null) return "null";
-                  if (val instanceof int[]) {
-                      return Arrays.toString((int[]) val);
-                  }
-                  if (val instanceof byte[]) {
-                      byte[] b = (byte[]) val;
-                      if (b.length <= 64) return Arrays.toString(b);
-                      return "byte[" + b.length + "]";
-                  }
                   if (val instanceof Object[]) {
                       Object[] arr = (Object[]) val;
                       StringBuilder sb = new StringBuilder("[");
-                      int lim = Math.min(arr.length, 10);
+                      int lim = Math.min(arr.length, 8);
                       for (int i = 0; i < lim; i++) {
                           if (i > 0) sb.append(", ");
                           if (arr[i] instanceof Object[]) {
                               sb.append(Arrays.deepToString((Object[]) arr[i]));
-                          } else if (arr[i] instanceof int[]) {
-                              sb.append(Arrays.toString((int[]) arr[i]));
                           } else {
                               sb.append(arr[i] != null ? arr[i].getClass().getSimpleName() + ":" + String.valueOf(arr[i]) : "null");
                           }
@@ -399,7 +985,7 @@ jobs:
                       return sb.toString();
                   }
                   String s = String.valueOf(val);
-                  if (s.length() > maxStrLen) s = s.substring(0, maxStrLen) + "...";
+                  if (s.length() > 500) s = s.substring(0, 500) + "...";
                   return s.replace("\n", "\\n").replace("\r", "");
               }
 
@@ -415,77 +1001,38 @@ jobs:
               public static void onNewDexClassLoaderCreated(ClassLoader cl) {
                   if (cl == null) return;
 
-                  // A1. Secondary DEX initializer o.setFontWeight.serializer(Object[])->void:
-                  //     MUST use mode 8 (let it execute to initialize com.braze.enums.Gender$Companion.$$a & state,
-                  //     and only catch exceptions in afterHookedMethod! Blocking it in beforeHookedMethod caused
-                  //     NullPointerException at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer:1802!)
-                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 8);
+                  // A1. Block ONLY the real DexGuard tamper-flag setter classes:
+                  //     - o.ViewLayerCompanionLayerOutlineProvider1.serializer (discovered at IconCompatParcelizer:1926 in 55.txt!)
+                  //     - o.ewG.serializer (legacy 1Shot target)
+                  hookTargetMethodInClass(cl, "o.ViewLayerCompanionLayerOutlineProvider1", "serializer", 0);
                   hookTargetMethodInClass(cl, "o.ewG", "serializer", 0);
 
-                  // A2. v4.2643.1 Tamper Reporter discovered at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.IconCompatParcelizer:1926:
-                  //     o.ViewLayerCompanionLayerOutlineProvider1 -> RemoteActionCompatParcelizer -> serializer()
-                  hookViewLayerTamperClass(cl);
-
-                  // A3. Secondary DEX caller o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer()
+                  // A2. Secondary DEX initializer (o.setFontWeight.serializer & o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer):
+                  //     CRITICAL FIX FOR 55.txt: Do NOT block o.setFontWeight.serializer! It initializes com.braze.enums.Gender$Companion.$$a!
+                  //     Blocking it caused NullPointerException at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer:1802 and poisoned sessionToken!
+                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 8);
                   hookTargetMethodInClass(cl, "o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", 7);
+
+                  // A3. Hook OkHttp Engine (always active when OkHttp Fix is enabled)
+                  d.hookOkHttpInClassLoader(cl);
 
                   if (b.sOpt1ShotExact) {
                       return;
                   }
 
-                  // B. Hook obfuscated RiderSupportFeaturesImpl & integrity classes (WITHOUT hooking helper methods a/b/c!)
-                  hookObfuscatedIntegrityClasses(cl);
+                  // B. Hook verifyHookIntegrity$1 & o.transaction1 (discovered at 55.txt line 30 & 43!)
+                  //    NOTE: Do NOT hook .a(), .b(), .c() of o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds, o.wakeScreenIfAppropriatelambda3,
+                  //    or o.changeUserlambda10 so SystemClock.elapsedRealtime() timing checks execute in <1ms!
+                  hookTargetMethodInClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyHookIntegrity$1", "invokeSuspend", 10);
+                  hookTargetMethodInClass(cl, "o.transaction1", null, 6);
+                  hookSessionTokenDiagnostic(cl);
 
-                  // C. Hook Jetpack Compose AnnotatedString & TextStringSimpleNode
+                  // C. Hook Jetpack Compose AnnotatedString & TextStringSimpleNode for UI error & order detection
                   hookComposeAnnotatedString(cl);
-
-                  // D. Hook Obfuscated OkHttp3 RealInterceptorChain & read full 403 error headers/body
-                  hookOkHttpClasses(cl);
-
-                  // E. Hook Incognia SDK entry points
-                  hookIncogniaClasses(cl);
               }
 
-              private static synchronized void hookViewLayerTamperClass(ClassLoader cl) {
-                  String cn = "o.ViewLayerCompanionLayerOutlineProvider1";
-                  if (sHookedClasses.contains(cn)) return;
-                  try {
-                      Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
-                      if (cls == null) return;
-                      sHookedClasses.add(cn);
-
-                      // Hook all methods on o.ViewLayerCompanionLayerOutlineProvider1 (especially serializer / RemoteActionCompatParcelizer)
-                      for (Method m : cls.getDeclaredMethods()) {
-                          String mName = m.getName();
-                          if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) continue;
-                          int mode = ("serializer".equals(mName) && m.getReturnType() == void.class) ? 0 : 8;
-                          XposedBridge.hookMethod(m, new a(mode));
-                          log("HOOK-OK", "Hooked ViewLayer tamper method " + cn + "." + mName
-                              + Arrays.toString(m.getParameterTypes()) + "->" + m.getReturnType().getSimpleName()
-                              + " (mode=" + mode + ")");
-                      }
-
-                      // Also inspect static field RemoteActionCompatParcelizer if it holds a delegate instance
-                      for (Field f : cls.getDeclaredFields()) {
-                          if (Modifier.isStatic(f.getModifiers())) {
-                              f.setAccessible(true);
-                              Object val = f.get(null);
-                              Class<?> fieldType = val != null ? val.getClass() : f.getType();
-                              if (fieldType != null && fieldType != Object.class && fieldType != String.class
-                                      && !fieldType.isPrimitive() && !fieldType.isArray()
-                                      && !fieldType.getName().startsWith("java.")
-                                      && !fieldType.getName().startsWith("android.")) {
-                                  hookTargetMethodInClass(cl, fieldType.getName(), "serializer", 0);
-                              }
-                          }
-                      }
-                  } catch (Throwable t) {
-                      logError("HookViewLayer", t);
-                  }
-              }
-
-              private static synchronized void hookTargetMethodInClass(ClassLoader cl, String cn, String methodName, int hookMode) {
-                  String key = cn + "#" + methodName + "#" + hookMode;
+              public static synchronized void hookTargetMethodInClass(ClassLoader cl, String cn, String methodName, int hookMode) {
+                  String key = cl.hashCode() + "#" + cn + "#" + (methodName != null ? methodName : "*") + "#" + hookMode;
                   if (sHookedClasses.contains(key)) return;
                   try {
                       Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
@@ -496,107 +1043,44 @@ jobs:
                       int count = 0;
                       for (Method m : methods) {
                           if (methodName == null || methodName.equals(m.getName())) {
-                              String mName = m.getName();
-                              if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) continue;
+                              if (hookMode == 6 && m.getReturnType() != boolean.class) {
+                                  continue;
+                              }
                               if (sigs.length() > 0) sigs.append("; ");
-                              sigs.append(mName).append(Arrays.toString(m.getParameterTypes()))
+                              sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
                                   .append("->").append(m.getReturnType().getSimpleName());
                               XposedBridge.hookMethod(m, new a(hookMode));
                               count++;
                           }
                       }
                       if (count > 0) {
-                          log("DEX-GUARD", "Hooked " + cn + "." + (methodName != null ? methodName : "*")
-                              + " (mode=" + hookMode + ", " + count + " methods): " + sigs
-                              + " | loader=" + cls.getClassLoader().getClass().getName());
+                          log("HOOK-OK", "Hooked " + cn + (methodName != null ? "." + methodName : "")
+                              + " (mode=" + hookMode + ", " + count + " methods): " + sigs);
                       }
                   } catch (Throwable t) {
                       logError("HookDex_" + cn, t);
                   }
               }
 
-              private static synchronized void hookObfuscatedIntegrityClasses(ClassLoader cl) {
-                  String[] targets = {
-                      "o.r8lambdaFCGRAg6MbUuOq_lpWWSN4eMkQA",
-                      "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds",
-                      "o.wakeScreenIfAppropriatelambda3",
-                      "o.changeUserlambda10",
-                      "o.transaction1",
-                      "io.reactivex.internal.operators.single.SingleJust",
-                      "com.mapbox.geojson.constants.GeoJsonConstants",
-                      "com.roadrunner.secure.certificate.GetAuthSessionTokenShaImpl",
-                      "com.roadrunner.secure.certificate.GetAuthSessionTokenShaImpl$invoke$2"
-                  };
-                  for (String cn : targets) {
-                      if (sHookedClasses.contains(cn)) continue;
-                      try {
-                          Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
-                          if (cls == null) continue;
-                          sHookedClasses.add(cn);
-                          Method[] methods = cls.getDeclaredMethods();
-                          StringBuilder sigs = new StringBuilder();
-                          int hooked = 0;
-                          for (Method m : methods) {
-                              String mName = m.getName();
-                              // CRITICAL: Never hook string/int decryption loop helpers a/b/c!
-                              // Hooking a/b/c caused 500+ synchronous IPC logs & a 4-second freeze during Login!
-                              if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) {
-                                  continue;
-                              }
-                              if (cn.endsWith("SingleJust") && !"RemoteActionCompatParcelizer".equals(mName)) {
-                                  continue;
-                              }
-                              if (cn.endsWith("GeoJsonConstants") && !"read".equals(mName)) {
-                                  continue;
-                              }
-                              if (sigs.length() > 0) sigs.append("; ");
-                              sigs.append(mName).append(Arrays.toString(m.getParameterTypes()))
-                                  .append("->").append(m.getReturnType().getSimpleName());
+              private static synchronized void hookSessionTokenDiagnostic(ClassLoader cl) {
+                  String cn = "o.changeUserlambda10";
+                  String key = cl.hashCode() + "#" + cn + "#read";
+                  if (sHookedClasses.contains(key)) return;
+                  try {
+                      Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
+                      if (cls == null) return;
+                      sHookedClasses.add(key);
+                      for (Method m : cls.getDeclaredMethods()) {
+                          if ("read".equals(m.getName()) && m.getParameterTypes().length == 0) {
                               XposedBridge.hookMethod(m, new XC_MethodHook() {
                                   @Override
-                                  protected void beforeHookedMethod(MethodHookParam param) {
-                                      String mn = param.method.getName();
-                                      // If sOptSkipVerifyCoro is enabled, block RiderSupportFeaturesImpl integrity launchers directly
-                                      if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass
-                                              && "o.r8lambdaFCGRAg6MbUuOq_lpWWSN4eMkQA".equals(cn)
-                                              && ((Method) param.method).getReturnType() == void.class
-                                              && (param.args == null || param.args.length == 0)) {
-                                          param.setResult(null);
-                                          log("BYPASS", "Blocked RiderSupportFeaturesImpl launcher " + cn + "." + mn + "()");
-                                      }
-                                  }
-
-                                  @Override
                                   protected void afterHookedMethod(MethodHookParam param) {
-                                      String mn = param.method.getName();
-                                      Object res = param.getResult();
-                                      Throwable thr = param.getThrowable();
-                                      String extra = "";
-                                      if (cn.contains("GetAuthSessionTokenShaImpl") && param.thisObject != null) {
-                                          extra = " | this=" + dumpObjectFields(param.thisObject, 500);
-                                      }
-                                      log("SUPPORT-TRACE", cn + "." + mn
-                                          + " args=" + formatValueBrief(param.args, 400)
-                                          + " -> result=" + formatValueBrief(res, 400)
-                                          + (thr != null ? " err=" + thr + " stack=" + formatTopStack(thr, 8) : "")
-                                          + extra
-                                          + " | caller=" + getCallerInfo(6));
-                                      if (thr != null && b.sOptIntegrityBypass && cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")) {
-                                          Class<?> rt = ((Method) param.method).getReturnType();
-                                          if (rt == void.class) {
-                                              param.setResult(null);
-                                          }
-                                      }
+                                      log("SESSION-SHA", "GetAuthSessionTokenSha seed o.changeUserlambda10.read() -> " + param.getResult());
                                   }
                               });
-                              hooked++;
                           }
-                          if (hooked > 0) {
-                              log("HOOK-OK", "Hooked integrity class " + cn + " (" + hooked + " methods): " + sigs);
-                          }
-                      } catch (Throwable t) {
-                          logError("HookIntegrity_" + cn, t);
                       }
+                  } catch (Throwable ignored) {
                   }
               }
 
@@ -606,11 +1090,12 @@ jobs:
                       "androidx.compose.foundation.text.modifiers.TextStringSimpleNode"
                   };
                   for (String cn : composeTargets) {
-                      if (sHookedClasses.contains(cn)) continue;
+                      String key = cl.hashCode() + "#" + cn;
+                      if (sHookedClasses.contains(key)) continue;
                       try {
                           Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
                           if (cls == null) continue;
-                          sHookedClasses.add(cn);
+                          sHookedClasses.add(key);
                           for (Constructor<?> ctor : cls.getDeclaredConstructors()) {
                               XposedBridge.hookMethod(ctor, new XC_MethodHook() {
                                   @Override
@@ -618,192 +1103,14 @@ jobs:
                                       if (param.args != null && param.args.length > 0 && param.args[0] != null) {
                                           String txt = String.valueOf(param.args[0]);
                                           if (isInterestingErrorString(txt)) {
-                                              log("IAL403-DETECT", cn.substring(cn.lastIndexOf('.') + 1) + " created: \"" + txt
-                                                  + "\" | stack=" + getCallerInfo(20));
+                                              log("IAL403-DETECT", cn.substring(cn.lastIndexOf('.') + 1) + " created: \"" + txt + "\"");
+                                          } else if (b.sOptOkHttpFix && (txt.equalsIgnoreCase("Accept") || txt.contains("قبول") || txt.contains("موافقة"))) {
+                                              d.triggerUiOrderAcceptIfVisible();
                                           }
                                       }
                                   }
                               });
                           }
-                          log("HOOK-OK", "Hooked Compose " + cn.substring(cn.lastIndexOf('.') + 1) + " for IAL403 UI stack trace");
-                      } catch (Throwable ignored) {
-                      }
-                  }
-              }
-
-              private static synchronized void hookOkHttpClasses(ClassLoader cl) {
-                  String chainCn = "o.insertOrIgnoreItem";
-                  if (!sHookedClasses.contains(chainCn)) {
-                      try {
-                          Class<?> chainCls = XposedHelpers.findClassIfExists(chainCn, cl);
-                          if (chainCls != null) {
-                              sHookedClasses.add(chainCn);
-                              for (Method m : chainCls.getDeclaredMethods()) {
-                                  if ("write".equals(m.getName()) && m.getParameterTypes().length == 1) {
-                                      XposedBridge.hookMethod(m, new XC_MethodHook() {
-                                          @Override
-                                          protected void afterHookedMethod(MethodHookParam param) {
-                                              Object req = (param.args != null && param.args.length > 0) ? param.args[0] : null;
-                                              Object res = param.getResult();
-                                              Throwable err = param.getThrowable();
-                                              inspectObfuscatedOkHttpCall(param.thisObject, req, res, err);
-                                          }
-                                      });
-                                  }
-                              }
-                              log("HOOK-OK", "Hooked obfuscated OkHttp RealInterceptorChain (o.insertOrIgnoreItem.write)");
-                          }
-                      } catch (Throwable t) {
-                          logError("HookOkHttpChain", t);
-                      }
-                  }
-              }
-
-              private static final ThreadLocal<Boolean> sInspectingHttp = new ThreadLocal<Boolean>() {
-                  @Override
-                  protected Boolean initialValue() {
-                      return Boolean.FALSE;
-                  }
-              };
-
-              private static String peekResponseBodyString(Object resObj) {
-                  if (resObj == null) return "null";
-                  try {
-                      Field bodyField = null;
-                      for (Field f : resObj.getClass().getDeclaredFields()) {
-                          if ("body".equals(f.getName())) {
-                              bodyField = f;
-                              break;
-                          }
-                      }
-                      if (bodyField == null) return "no-body-field";
-                      bodyField.setAccessible(true);
-                      Object bodyObj = bodyField.get(resObj);
-                      if (bodyObj == null) return "null";
-
-                      // Find BufferedSource returned by zero-arg method on ResponseBody
-                      Object sourceObj = null;
-                      for (Method m : bodyObj.getClass().getMethods()) {
-                          if (m.getParameterTypes().length == 0 && m.getReturnType() != void.class
-                                  && m.getReturnType() != long.class && m.getReturnType() != int.class
-                                  && m.getReturnType() != String.class && m.getReturnType() != Class.class
-                                  && !m.getName().equals("toString") && !m.getName().equals("hashCode")
-                                  && !m.getName().equals("close")) {
-                              try {
-                                  Object cand = m.invoke(bodyObj);
-                                  if (cand != null) {
-                                      // Check if cand has a clone() or buffer method
-                                      for (Method sm : cand.getClass().getMethods()) {
-                                          if ("clone".equals(sm.getName()) && sm.getParameterTypes().length == 0) {
-                                              sourceObj = cand;
-                                              break;
-                                          }
-                                      }
-                                  }
-                              } catch (Throwable ignored) {
-                              }
-                              if (sourceObj != null) break;
-                          }
-                      }
-                      if (sourceObj != null) {
-                          // Request up to 8192 bytes into buffer without consuming it
-                          for (Method m : sourceObj.getClass().getMethods()) {
-                              Class<?>[] pts = m.getParameterTypes();
-                              if (pts.length == 1 && pts[0] == long.class && m.getReturnType() == boolean.class) {
-                                  try {
-                                      m.invoke(sourceObj, 8192L);
-                                      break;
-                                  } catch (Throwable ignored) {
-                                  }
-                              }
-                          }
-                          // Clone the okio.Buffer and read String
-                          Method cloneMth = sourceObj.getClass().getMethod("clone");
-                          Object clonedBuf = cloneMth.invoke(sourceObj);
-                          if (clonedBuf != null) {
-                              for (Method bm : clonedBuf.getClass().getMethods()) {
-                                  if (bm.getReturnType() == String.class && bm.getParameterTypes().length == 1
-                                          && bm.getParameterTypes()[0] == Charset.class) {
-                                      return (String) bm.invoke(clonedBuf, StandardCharsets.UTF_8);
-                                  }
-                              }
-                              for (Method bm : clonedBuf.getClass().getMethods()) {
-                                  if (bm.getReturnType() == byte[].class && bm.getParameterTypes().length == 0) {
-                                      byte[] bytes = (byte[]) bm.invoke(clonedBuf);
-                                      if (bytes != null) return new String(bytes, StandardCharsets.UTF_8);
-                                  }
-                              }
-                          }
-                      }
-                      return dumpObjectFields(bodyObj, 600);
-                  } catch (Throwable t) {
-                      return "peekErr:" + t.getClass().getSimpleName() + ":" + t.getMessage();
-                  }
-              }
-
-              private static void inspectObfuscatedOkHttpCall(Object chainObj, Object req, Object res, Throwable err) {
-                  if (sInspectingHttp.get()) return;
-                  sInspectingHttp.set(Boolean.TRUE);
-                  try {
-                      if (res != null) {
-                          int statusCode = -1;
-                          Object netRes = null;
-                          for (Field f : res.getClass().getDeclaredFields()) {
-                              f.setAccessible(true);
-                              if (f.getType() == int.class && "code".equals(f.getName())) {
-                                  statusCode = f.getInt(res);
-                              } else if ("networkResponse".equals(f.getName())) {
-                                  netRes = f.get(res);
-                              }
-                          }
-                          if (statusCode >= 400) {
-                              // Deduplicate so we log the complete network response + body once instead of 20 times
-                              int resKey = System.identityHashCode(netRes != null ? netRes : res);
-                              if (!sLoggedHttpResHashes.add(resKey)) {
-                                  return;
-                              }
-                              String reqSummary = req != null ? dumpObjectFields(req, 1500) : "null";
-                              String resSummary = dumpObjectFields(res, 1500);
-                              String errBodyText = peekResponseBodyString(res);
-                              log("HTTP-ERR-BODY", "HTTP " + statusCode
-                                  + " | errBody=" + errBodyText
-                                  + " | req=" + reqSummary
-                                  + " | res=" + resSummary);
-                          }
-                      } else if (err != null) {
-                          String reqSummary = req != null ? dumpObjectFields(req, 800) : "null";
-                          log("HTTP-ERR-BODY", "HTTP Exception: " + err + " | req=" + reqSummary);
-                      }
-                  } catch (Throwable ignored) {
-                  } finally {
-                      sInspectingHttp.set(Boolean.FALSE);
-                  }
-              }
-
-              private static synchronized void hookIncogniaClasses(ClassLoader cl) {
-                  String[] incClasses = {
-                      "com.incognia.Incognia",
-                      "com.incognia.IncogniaTrial"
-                  };
-                  for (String cn : incClasses) {
-                      if (sHookedClasses.contains(cn)) continue;
-                      try {
-                          Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
-                          if (cls == null) continue;
-                          sHookedClasses.add(cn);
-                          for (Method m : cls.getDeclaredMethods()) {
-                              XposedBridge.hookMethod(m, new XC_MethodHook() {
-                                  @Override
-                                  protected void afterHookedMethod(MethodHookParam param) {
-                                      log("INCOGNIA-TRACE", cn + "." + param.method.getName()
-                                          + " args=" + formatValueBrief(param.args)
-                                          + " -> result=" + formatValueBrief(param.getResult())
-                                          + (param.getThrowable() != null ? " err=" + param.getThrowable() : "")
-                                          + " | caller=" + getCallerInfo(6));
-                                  }
-                              });
-                          }
-                          log("HOOK-OK", "Hooked Incognia entry class: " + cn);
                       } catch (Throwable ignored) {
                       }
                   }
@@ -855,9 +1162,7 @@ jobs:
           package i2;
 
           import de.robv.android.xposed.XC_MethodHook;
-          import java.lang.reflect.Field;
           import java.lang.reflect.Method;
-          import java.util.Arrays;
 
           public final class a extends XC_MethodHook {
               public final int f1994a;
@@ -870,99 +1175,74 @@ jobs:
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // 1Shot.apk + v4.2643.1 0-arg tamper reporter:
-                              // o.ewG.serializer() -> void
-                              // o.ViewLayerCompanionLayerOutlineProvider1.serializer() -> void
+                      case 0: // Tamper reporter setter in main DEX:
+                              // o.ViewLayerCompanionLayerOutlineProvider1.serializer(...) -> void
+                              // o.ewG.serializer(...) -> void
                           if (!b.sOptIntegrityBypass && !b.sOpt1ShotExact) return;
                           String clsName = methodHookParam.method.getDeclaringClass().getName();
                           String mthName = methodHookParam.method.getName();
-                          String argsInfo = c.formatValueBrief(methodHookParam.args);
                           methodHookParam.setResult(null);
-                          c.log("DEX-BYPASS", "Blocked Tamper Reporter: " + clsName + "." + mthName
-                              + " args=" + argsInfo + " -> null | caller=" + c.getCallerInfo(8));
-                          return;
-
-                      case 7: // o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer() -> void
-                          if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
-                              methodHookParam.setResult(null);
-                              c.log("BYPASS", "Skipped IconCompatParcelizer() via sOptSkipVerifyCoro | caller=" + c.getCallerInfo(6));
-                          } else {
-                              c.log("DEX-GUARD", "Entering IconCompatParcelizer() | caller=" + c.getCallerInfo(6));
-                          }
-                          return;
-
-                      case 8: // o.setFontWeight.serializer(Object[]) -> allow execution so Gender$Companion.$$a initializes!
-                          c.log("DEX-GUARD", "Entering " + methodHookParam.method.getDeclaringClass().getName()
-                              + "." + methodHookParam.method.getName()
-                              + " argsBefore=" + c.formatValueBrief(methodHookParam.args, 400)
-                              + " | caller=" + c.getCallerInfo(8));
+                          c.log("DEX-BYPASS", "Blocked Tamper Flag Setter: " + clsName + "." + mthName
+                              + " args=" + c.formatValueBrief(methodHookParam.args) + " -> null");
                           return;
 
                       case 2: // Location.isMock / isFromMockProvider
                           if (b.sOpt1ShotExact || !b.sOptMockHide) return;
-                          c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName()
-                              + "() -> false | caller=" + c.getCallerInfo());
+                          c.log("LOCATION", "Blocked MockLocation check " + methodHookParam.method.getName() + "() -> false");
                           methodHookParam.setResult(Boolean.FALSE);
                           return;
 
                       case 3: // InstallSourceInfo.getPackageSource() (Android 13+ / SDK 33+)
                           if (!b.sOptInstallerSpoof) return;
-                          c.log("INSTALLER", "Spoofed getPackageSource() -> 2 (PACKAGE_SOURCE_STORE) | caller=" + c.getCallerInfo());
                           methodHookParam.setResult(2);
                           return;
 
-                      case 4: // verifyRootIntegrity$1.invokeSuspend & verifyHookIntegrity$1.invokeSuspend
-                          String coroName = methodHookParam.method.getDeclaringClass().getSimpleName();
-                          String innerWriteDump = "";
-                          try {
-                              if (methodHookParam.thisObject != null) {
-                                  for (Field wf : methodHookParam.thisObject.getClass().getDeclaredFields()) {
-                                      if (!wf.getType().isPrimitive()) {
-                                          wf.setAccessible(true);
-                                          Object wObj = wf.get(methodHookParam.thisObject);
-                                          if (wObj != null) {
-                                              innerWriteDump = " " + wf.getName() + "Obj=" + c.dumpObjectFields(wObj);
-                                              break;
-                                          }
-                                      }
-                                  }
-                              }
-                          } catch (Throwable ignored) {
-                          }
-                          c.log("SUPPORT-TRACE", "Enter " + coroName + ".invokeSuspend: this="
-                              + c.dumpObjectFields(methodHookParam.thisObject) + innerWriteDump
-                              + " | caller=" + c.getCallerInfo(6));
+                      case 4: // verifyRootIntegrity$1.invokeSuspend
                           if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
                               Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
                                   ? methodHookParam.thisObject.getClass().getClassLoader() : null);
                               if (unitInstance != null) {
                                   methodHookParam.setResult(unitInstance);
-                                  c.log("BYPASS", "Short-circuited " + coroName + ".invokeSuspend -> kotlin.Unit");
+                                  c.log("BYPASS", "Short-circuited verifyRootIntegrity$1.invokeSuspend -> kotlin.Unit");
                               }
                           }
                           return;
 
-                      case 5: // o.x5.serializer tracer
-                      case 9: // BaseDexClassLoader.<init> constructor hook
-                          return;
-
-                      case 6: // Obfuscated boolean root-check helpers
+                      case 6: // Obfuscated boolean root/hook-check helpers (o.transaction1 / o.notifyChildren... / o.setCustomAttributeArray)
                           if (b.sOpt1ShotExact || (!b.sOptRootHide && !b.sOptIntegrityBypass)) return;
                           Class<?> rt = (methodHookParam.method instanceof Method)
                               ? ((Method) methodHookParam.method).getReturnType() : Object.class;
                           if (rt == boolean.class) {
                               methodHookParam.setResult(Boolean.FALSE);
-                              c.log("BYPASS", "Blocked boolean root check "
+                              c.log("BYPASS", "Blocked boolean integrity check "
                                   + methodHookParam.method.getDeclaringClass().getName() + "."
-                                  + methodHookParam.method.getName() + " args=" + c.formatValueBrief(methodHookParam.args)
-                                  + " -> false | caller=" + c.getCallerInfo());
+                                  + methodHookParam.method.getName() + " -> false");
+                          }
+                          return;
+
+                      case 7: // o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer() -> void
+                          if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
+                              methodHookParam.setResult(null);
+                          }
+                          return;
+
+                      case 8: // o.setFontWeight.serializer(Object[]) -> let it run so Gender$Companion.$$a is initialized!
+                      case 5:
+                      case 9: // BaseDexClassLoader.<init>
+                          return;
+
+                      case 10: // RiderSupportFeaturesImpl$verifyHookIntegrity$1.invokeSuspend -> short-circuit so o.transaction1 never detects Xposed!
+                          if (!b.sOptIntegrityBypass) return;
+                          Object unitObj = b.getKotlinUnit(methodHookParam.thisObject != null
+                              ? methodHookParam.thisObject.getClass().getClassLoader() : null);
+                          if (unitObj != null) {
+                              methodHookParam.setResult(unitObj);
+                              c.log("BYPASS", "Bypassed verifyHookIntegrity$1.invokeSuspend -> kotlin.Unit");
                           }
                           return;
 
                       default: // InstallSourceInfo package name methods (case 1)
                           if (!b.sOptInstallerSpoof) return;
-                          c.log("INSTALLER", "Spoofed " + methodHookParam.method.getName()
-                              + "() -> com.android.vending | caller=" + c.getCallerInfo());
                           methodHookParam.setResult("com.android.vending");
                           return;
                   }
@@ -971,60 +1251,24 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
-                  if (this.f1994a == 7) {
+                  if (this.f1994a == 7 || this.f1994a == 8) {
                       Throwable t = methodHookParam.getThrowable();
                       if (t != null) {
-                          c.log("DEX-BYPASS", "Caught & suppressed exception in IconCompatParcelizer(): "
-                              + t.getClass().getSimpleName() + ": " + t.getMessage()
-                              + " | stack=" + c.formatTopStack(t, 10));
+                          c.log("DEX-BYPASS", "Suppressed exception in " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName() + ": " + t.getClass().getSimpleName());
                           if (b.sOptIntegrityBypass || b.sOpt1ShotExact) {
                               methodHookParam.setResult(null);
                           }
-                      } else {
-                          c.log("DEX-BYPASS", "IconCompatParcelizer() completed normally!");
-                      }
-                  } else if (this.f1994a == 8) {
-                      Throwable t = methodHookParam.getThrowable();
-                      String cn = methodHookParam.method.getDeclaringClass().getName();
-                      String mn = methodHookParam.method.getName();
-                      if (t != null) {
-                          c.log("DEX-BYPASS", "Exception in " + cn + "." + mn + ": "
-                              + t.getClass().getSimpleName() + ": " + t.getMessage()
-                              + " | stack=" + c.formatTopStack(t, 10));
-                          if ((b.sOptIntegrityBypass || b.sOpt1ShotExact)
-                                  && ((Method) methodHookParam.method).getReturnType() == void.class) {
-                              methodHookParam.setResult(null);
-                          }
-                      } else {
-                          c.log("DEX-BYPASS", cn + "." + mn + " completed! argsAfter="
-                              + c.formatValueBrief(methodHookParam.args, 400)
-                              + " -> result=" + c.formatValueBrief(methodHookParam.getResult(), 400));
+                      } else if (this.f1994a == 8) {
+                          c.log("DEX-BYPASS", "o.setFontWeight.serializer initialized Gender$Companion.$$a cleanly!");
                       }
                   } else if (this.f1994a == 4) {
-                      String coroName = methodHookParam.method.getDeclaringClass().getSimpleName();
                       Throwable t = methodHookParam.getThrowable();
-                      if (t != null) {
-                          c.log("NPE-TRACE", "Exception in " + coroName
-                              + "." + methodHookParam.method.getName() + ": " + t.getClass().getSimpleName()
-                              + " (" + t.getMessage() + ")"
-                              + " | thisAfter=" + c.dumpObjectFields(methodHookParam.thisObject)
-                              + " | stack=" + c.formatTopStack(t, 12));
-                          if (b.sOptIntegrityBypass) {
-                              Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
-                                  ? methodHookParam.thisObject.getClass().getClassLoader() : null);
-                              methodHookParam.setResult(unitInstance);
-                          }
-                      } else {
-                          c.log("BYPASS", coroName + ".invokeSuspend completed normally! result="
-                              + String.valueOf(methodHookParam.getResult())
-                              + " | thisAfter=" + c.dumpObjectFields(methodHookParam.thisObject));
+                      if (t != null && b.sOptIntegrityBypass) {
+                          Object unitInstance = b.getKotlinUnit(methodHookParam.thisObject != null
+                              ? methodHookParam.thisObject.getClass().getClassLoader() : null);
+                          methodHookParam.setResult(unitInstance);
                       }
-                  } else if (this.f1994a == 5) {
-                      String argsStr = methodHookParam.args != null ? Arrays.toString(methodHookParam.args) : "[]";
-                      Object res = methodHookParam.getResult();
-                      Throwable t = methodHookParam.getThrowable();
-                      c.log("X5-TRACE", "o.x5." + methodHookParam.method.getName() + "(" + argsStr + ") -> result="
-                          + String.valueOf(res) + (t != null ? " throwable=" + t : "") + " | caller=" + c.getCallerInfo());
                   } else if (this.f1994a == 9) {
                       if (methodHookParam.thisObject instanceof ClassLoader) {
                           c.onNewDexClassLoaderCreated((ClassLoader) methodHookParam.thisObject);
@@ -1049,16 +1293,12 @@ jobs:
           import de.robv.android.xposed.XSharedPreferences;
           import de.robv.android.xposed.XposedHelpers;
           import java.io.BufferedReader;
-          import java.io.ByteArrayInputStream;
           import java.io.File;
           import java.io.FileInputStream;
           import java.io.FileOutputStream;
-          import java.io.InputStream;
           import java.io.InputStreamReader;
-          import java.io.OutputStream;
           import java.nio.charset.StandardCharsets;
-          import java.security.cert.Certificate;
-          import java.security.cert.X509Certificate;
+          import java.security.ProviderException;
           import java.util.Arrays;
           import java.util.HashMap;
           import java.util.HashSet;
@@ -1074,6 +1314,13 @@ jobs:
               public final int f1995a;
               public final Object f1996b;
 
+              public static final String sRealBrand = Build.BRAND;
+              public static final String sRealManufacturer = Build.MANUFACTURER;
+              public static final String sRealModel = Build.MODEL;
+              public static final String sRealDevice = Build.DEVICE;
+              public static final String sRealBoard = Build.BOARD;
+              public static final String sRealBuildId = Build.ID;
+
               public static volatile String sBrand;
               public static volatile String sManufacturer;
               public static volatile String sModel;
@@ -1085,9 +1332,12 @@ jobs:
               public static volatile String sBuildId;
               public static volatile String sBuildIncremental;
               public static volatile String sAndroidId;
+              public static volatile String sHttpAgent;
               private static volatile String sDataDir;
+              public static volatile Activity sCurrentActivity;
 
               public static volatile boolean sOptMaster = true;
+              public static volatile boolean sOptOkHttpFix = true;
               public static volatile boolean sOpt1ShotExact = false;
               public static volatile boolean sOptIntegrityBypass = true;
               public static volatile boolean sOptSkipVerifyCoro = false;
@@ -1104,8 +1354,6 @@ jobs:
               private static volatile String sCachedSanitizedFdList = null;
               private static volatile String sCachedSanitizedPsList = null;
               private static volatile String sCachedSanitizedGetprop = null;
-              private static volatile File sSanitizedMapsFile = null;
-              private static volatile File sSanitizedMountsFile = null;
 
               private static final ThreadLocal<Boolean> sInInternalExec = new ThreadLocal<Boolean>() {
                   @Override
@@ -1150,68 +1398,6 @@ jobs:
                   }
               }
 
-              public static final class FakeProcess extends Process {
-                  private final byte[] stdoutBytes;
-                  private final byte[] stderrBytes;
-                  private final int exitCode;
-
-                  public FakeProcess(String stdoutText, int exitCode) {
-                      this(stdoutText, "", exitCode);
-                  }
-
-                  public FakeProcess(String stdoutText, String stderrText, int exitCode) {
-                      this.stdoutBytes = (stdoutText != null ? stdoutText : "").getBytes(StandardCharsets.UTF_8);
-                      this.stderrBytes = (stderrText != null ? stderrText : "").getBytes(StandardCharsets.UTF_8);
-                      this.exitCode = exitCode;
-                  }
-
-                  @Override
-                  public OutputStream getOutputStream() {
-                      return new OutputStream() {
-                          @Override
-                          public void write(int b) {}
-                      };
-                  }
-
-                  @Override
-                  public InputStream getInputStream() {
-                      return new ByteArrayInputStream(this.stdoutBytes);
-                  }
-
-                  @Override
-                  public InputStream getErrorStream() {
-                      return new ByteArrayInputStream(this.stderrBytes);
-                  }
-
-                  @Override
-                  public int waitFor() {
-                      return this.exitCode;
-                  }
-
-                  @Override
-                  public boolean waitFor(long timeout, TimeUnit unit) {
-                      return true;
-                  }
-
-                  @Override
-                  public int exitValue() {
-                      return this.exitCode;
-                  }
-
-                  @Override
-                  public void destroy() {}
-
-                  @Override
-                  public Process destroyForcibly() {
-                      return this;
-                  }
-
-                  @Override
-                  public boolean isAlive() {
-                      return false;
-                  }
-              }
-
               private static String expandEnvVars(String cmdStr, Map<String, String> envMap) {
                   if (cmdStr == null || envMap == null || envMap.isEmpty()) return cmdStr;
                   String resolved = cmdStr;
@@ -1235,69 +1421,6 @@ jobs:
                       || l.contains("gmain") || l.contains("gdbus") || l.contains("supersu")
                       || l.contains("busybox") || l.contains("memfd:") || l.contains("jit-cache")
                       || l.contains("/su") || l.contains(" su ") || l.endsWith(" su");
-              }
-
-              private static File getSanitizedProcFile(String realPath) {
-                  if (realPath == null) return null;
-                  String p = realPath.trim();
-                  boolean isMaps = p.equals("/proc/self/maps") || p.equals("/proc/self/smaps")
-                      || (p.startsWith("/proc/") && (p.endsWith("/maps") || p.endsWith("/smaps")));
-                  boolean isMounts = p.equals("/proc/self/mounts") || p.equals("/proc/self/mountinfo")
-                      || (p.startsWith("/proc/") && (p.endsWith("/mounts") || p.endsWith("/mountinfo")));
-                  if (!isMaps && !isMounts) return null;
-
-                  sInInternalExec.set(Boolean.TRUE);
-                  try {
-                      File baseDir = sDataDir != null ? new File(sDataDir, "cache") : new File("/data/local/tmp");
-                      if (!baseDir.exists()) baseDir.mkdirs();
-                      if (isMaps) {
-                          if (sSanitizedMapsFile != null && sSanitizedMapsFile.exists() && sSanitizedMapsFile.length() > 100) {
-                              return sSanitizedMapsFile;
-                          }
-                          File out = new File(baseDir, ".sys_m_" + android.os.Process.myPid());
-                          StringBuilder sb = new StringBuilder();
-                          try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream("/proc/self/maps"), StandardCharsets.UTF_8))) {
-                              String line;
-                              while ((line = br.readLine()) != null) {
-                                  if (!isSuspiciousLine(line)) {
-                                      sb.append(line).append("\n");
-                                  }
-                              }
-                          }
-                          try (FileOutputStream fos = new FileOutputStream(out, false)) {
-                              fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
-                          }
-                          sSanitizedMapsFile = out;
-                          return out;
-                      } else {
-                          if (sSanitizedMountsFile != null && sSanitizedMountsFile.exists() && sSanitizedMountsFile.length() > 50) {
-                              return sSanitizedMountsFile;
-                          }
-                          File out = new File(baseDir, ".sys_mt_" + android.os.Process.myPid());
-                          StringBuilder sb = new StringBuilder();
-                          try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(p), StandardCharsets.UTF_8))) {
-                              String line;
-                              while ((line = br.readLine()) != null) {
-                                  if (isSuspiciousLine(line) || line.contains("overlay") || line.contains("/debug_ramdisk")) {
-                                      continue;
-                                  }
-                                  if (line.contains(" /system ") || line.contains(" /vendor ") || line.contains(" /product ") || line.contains(" / ")) {
-                                      line = line.replace("rw,", "ro,");
-                                  }
-                                  sb.append(line).append("\n");
-                              }
-                          }
-                          try (FileOutputStream fos = new FileOutputStream(out, false)) {
-                              fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
-                          }
-                          sSanitizedMountsFile = out;
-                          return out;
-                      }
-                  } catch (Throwable ignored) {
-                      return null;
-                  } finally {
-                      sInInternalExec.set(Boolean.FALSE);
-                  }
               }
 
               private static String runRealCommandAndSanitize(String[] realCmd, String mode) {
@@ -1346,32 +1469,29 @@ jobs:
                   }
               }
 
-              private static Process spawnRealProcessWithOutput(String text, int exitCode, String tagSuffix) {
-                  sInInternalExec.set(Boolean.TRUE);
+              private static File writeSanitizedCacheFile(String fileName, String content) {
                   try {
-                      if (exitCode != 0) {
-                          return Runtime.getRuntime().exec(new String[]{"/system/bin/false"});
+                      File dir = null;
+                      Context ctx = c.resolveAnyContext();
+                      if (ctx != null && ctx.getCacheDir() != null) {
+                          dir = ctx.getCacheDir();
+                      } else if (sDataDir != null) {
+                          dir = new File(sDataDir, "cache");
                       }
-                      if ("1\n".equals(text)) {
-                          return Runtime.getRuntime().exec(new String[]{"/system/bin/echo", "1"});
-                      }
-                      File baseDir = sDataDir != null ? new File(sDataDir, "cache") : new File("/data/local/tmp");
-                      if (!baseDir.exists()) baseDir.mkdirs();
-                      File outFile = new File(baseDir, ".hs_out_" + tagSuffix);
-                      if (!outFile.exists() || outFile.length() == 0) {
-                          try (FileOutputStream fos = new FileOutputStream(outFile, false)) {
-                              fos.write((text != null ? text : "").getBytes(StandardCharsets.UTF_8));
+                      if (dir != null) {
+                          if (!dir.exists()) dir.mkdirs();
+                          File f = new File(dir, fileName);
+                          try (FileOutputStream fos = new FileOutputStream(f, false)) {
+                              fos.write((content != null ? content : "").getBytes(StandardCharsets.UTF_8));
                           }
+                          return f;
                       }
-                      return Runtime.getRuntime().exec(new String[]{"/system/bin/cat", outFile.getAbsolutePath()});
                   } catch (Throwable ignored) {
-                      return new FakeProcess(text, exitCode);
-                  } finally {
-                      sInInternalExec.set(Boolean.FALSE);
                   }
+                  return null;
               }
 
-              private static Process createSanitizedProcessForCommand(String rawCmdStr, Map<String, String> envMap) {
+              private static String[] buildRealSanitizedCommandArray(String rawCmdStr, Map<String, String> envMap) {
                   if (rawCmdStr == null) return null;
                   String cmdStr = expandEnvVars(rawCmdStr, envMap);
                   if (cmdStr.contains("log.tag.BRAZE") || cmdStr.contains("log.tag.APPBOY")) {
@@ -1379,19 +1499,16 @@ jobs:
                   }
                   String lower = cmdStr.toLowerCase(Locale.US);
 
-                  // 1. which su / busybox / magisk -> real /system/bin/false (exitCode 1, genuine UNIXProcess!)
                   if (lower.contains("which") || lower.endsWith(" su") || lower.contains(", su]")
                           || lower.contains("/su") || lower.contains("magisk")
                           || lower.contains("busybox") || lower.contains("kernelsu") || lower.contains("apatch")) {
-                      return spawnRealProcessWithOutput("", 1, "false");
+                      return new String[]{"/bin/sh", "-c", "exit 1"};
                   }
 
-                  // 2. getprop ro.secure or base64 encoded "getprop ro.secure" (Z2V0cHJvcCByby5zZWN1cmUK)
                   if (lower.contains("ro.secure") || cmdStr.contains("Z2V0cHJvcC")) {
-                      return spawnRealProcessWithOutput("1\n", 0, "ro_secure");
+                      return new String[]{"/bin/sh", "-c", "echo 1"};
                   }
 
-                  // 3. full getprop dump
                   if (lower.contains("getprop")) {
                       if (sCachedSanitizedGetprop == null || sCachedSanitizedGetprop.isEmpty()) {
                           String realOut = runRealCommandAndSanitize(new String[]{"/system/bin/getprop"}, "getprop");
@@ -1414,10 +1531,13 @@ jobs:
                           }
                           sCachedSanitizedGetprop = realOut;
                       }
-                      return spawnRealProcessWithOutput(sCachedSanitizedGetprop, 0, "getprop");
+                      File f = writeSanitizedCacheFile(".hs_prop_cache", sCachedSanitizedGetprop);
+                      if (f != null) {
+                          return new String[]{"/bin/sh", "-c", "cat " + f.getAbsolutePath()};
+                      }
+                      return new String[]{"/bin/sh", "-c", "echo '[ro.secure]: [1]'"};
                   }
 
-                  // 4. mount or base64 encoded "mount" (bW91bnQK)
                   if (lower.contains("mount") || cmdStr.contains("bW91bnQK")) {
                       if (sCachedSanitizedMounts == null || sCachedSanitizedMounts.isEmpty()) {
                           String realMounts = runRealCommandAndSanitize(new String[]{"/system/bin/mount"}, "mount");
@@ -1430,10 +1550,13 @@ jobs:
                           }
                           sCachedSanitizedMounts = realMounts;
                       }
-                      return spawnRealProcessWithOutput(sCachedSanitizedMounts, 0, "mount");
+                      File f = writeSanitizedCacheFile(".hs_mount_cache", sCachedSanitizedMounts);
+                      if (f != null) {
+                          return new String[]{"/bin/sh", "-c", "cat " + f.getAbsolutePath()};
+                      }
+                      return new String[]{"/bin/sh", "-c", "echo '/dev/block/dm-0 / ext4 ro,seclabel,relatime 0 0'"};
                   }
 
-                  // 5. ls -l /proc/<pid>/fd
                   if (lower.contains("/proc/") && lower.contains("/fd")) {
                       if (sCachedSanitizedFdList == null || sCachedSanitizedFdList.isEmpty()) {
                           int pid = android.os.Process.myPid();
@@ -1446,10 +1569,13 @@ jobs:
                           }
                           sCachedSanitizedFdList = realFds;
                       }
-                      return spawnRealProcessWithOutput(sCachedSanitizedFdList, 0, "fd");
+                      File f = writeSanitizedCacheFile(".hs_fd_cache", sCachedSanitizedFdList);
+                      if (f != null) {
+                          return new String[]{"/bin/sh", "-c", "cat " + f.getAbsolutePath()};
+                      }
+                      return new String[]{"/bin/sh", "-c", "echo 'total 0'"};
                   }
 
-                  // 6. ps -T -p <pid>
                   if (lower.contains("ps ") || lower.contains("[ps,")) {
                       if (sCachedSanitizedPsList == null || sCachedSanitizedPsList.isEmpty()) {
                           int pid = android.os.Process.myPid();
@@ -1460,7 +1586,11 @@ jobs:
                           }
                           sCachedSanitizedPsList = realPs;
                       }
-                      return spawnRealProcessWithOutput(sCachedSanitizedPsList, 0, "ps");
+                      File f = writeSanitizedCacheFile(".hs_ps_cache", sCachedSanitizedPsList);
+                      if (f != null) {
+                          return new String[]{"/bin/sh", "-c", "cat " + f.getAbsolutePath()};
+                      }
+                      return new String[]{"/bin/sh", "-c", "echo 'USER PID TID PPID VSZ RSS WCHAN ADDR S CMD'"};
                   }
 
                   return null;
@@ -1480,10 +1610,11 @@ jobs:
                       props.setProperty("bootloader", sBootloader != null ? sBootloader : "");
                       props.setProperty("fingerprint", sFingerprint != null ? sFingerprint : "");
                       props.setProperty("android_id", sAndroidId != null ? sAndroidId : "");
+                      props.setProperty("opt_okhttp_fix", String.valueOf(sOptOkHttpFix));
                       props.setProperty("opt_1shot_exact", String.valueOf(sOpt1ShotExact));
                       props.setProperty("opt_skip_verify_coro", String.valueOf(sOptSkipVerifyCoro));
                       try (FileOutputStream fos = new FileOutputStream(propFile)) {
-                          props.store(fos, "HS Rider Profile v3.6");
+                          props.store(fos, "HS Rider Profile v4.0");
                       }
                   } catch (Throwable ignored) {
                   }
@@ -1517,6 +1648,7 @@ jobs:
                       Bundle cfg = ctx.getContentResolver().call(c.LOG_PROVIDER_URI, "get_config", null, null);
                       if (cfg != null && cfg.containsKey("brand")) {
                           sOptMaster = cfg.getBoolean("opt_master", true);
+                          sOptOkHttpFix = cfg.getBoolean("opt_okhttp_fix", true);
                           sOpt1ShotExact = cfg.getBoolean("opt_1shot_exact", false);
                           sOptIntegrityBypass = cfg.getBoolean("opt_integrity", true);
                           sOptSkipVerifyCoro = cfg.getBoolean("opt_skip_verify_coro", false);
@@ -1539,11 +1671,12 @@ jobs:
                               sBuildId = h2.a.extractBuildIdFromFingerprint(sFingerprint);
                               sBuildIncremental = h2.a.extractIncrementalFromFingerprint(sFingerprint);
                               sAndroidId = cfg.getString("android_id", sAndroidId);
+                              sHttpAgent = h2.a.buildDalvikUserAgent(sModel, sBuildId);
                               saveProfileToLocalProp(sDataDir);
                               syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v3.6: " + sBrand + " / " + sModel
-                                  + " (1ShotExact=" + sOpt1ShotExact + ", SkipCoro=" + sOptSkipVerifyCoro + ")");
+                              c.log("PREFS", "Synced settings & profile from HS Panel v4.0: " + sBrand + " / " + sModel
+                                  + " (OkHttpFix=" + sOptOkHttpFix + ", 1ShotExact=" + sOpt1ShotExact + ")");
                           }
                       }
                   } catch (Throwable ignored) {
@@ -1556,6 +1689,7 @@ jobs:
                       XSharedPreferences xprefs = new XSharedPreferences("com.logistics.rider.lsposed", "com.logistics.rider.settings");
                       xprefs.reload();
                       sOptMaster = xprefs.getBoolean("opt_master", sOptMaster);
+                      sOptOkHttpFix = xprefs.getBoolean("opt_okhttp_fix", sOptOkHttpFix);
                       sOpt1ShotExact = xprefs.getBoolean("opt_1shot_exact", sOpt1ShotExact);
                       sOptIntegrityBypass = xprefs.getBoolean("opt_integrity", sOptIntegrityBypass);
                       sOptSkipVerifyCoro = xprefs.getBoolean("opt_skip_verify_coro", sOptSkipVerifyCoro);
@@ -1599,6 +1733,9 @@ jobs:
                               sBuildId = h2.a.extractBuildIdFromFingerprint(sFingerprint);
                               sBuildIncremental = h2.a.extractIncrementalFromFingerprint(sFingerprint);
                               sAndroidId = props.getProperty("android_id");
+                              if (props.getProperty("opt_okhttp_fix") != null) {
+                                  sOptOkHttpFix = Boolean.parseBoolean(props.getProperty("opt_okhttp_fix"));
+                              }
                               if (props.getProperty("opt_1shot_exact") != null) {
                                   sOpt1ShotExact = Boolean.parseBoolean(props.getProperty("opt_1shot_exact"));
                               }
@@ -1608,24 +1745,9 @@ jobs:
                           } catch (Throwable ignored) {
                           }
                       }
-                      if (sBrand == null || sBrand.isEmpty()) {
-                          int idx = 0;
-                          sBrand = h2.a.f1907a[idx];
-                          sManufacturer = h2.a.f1908b[idx];
-                          sModel = h2.a.f1909c[idx];
-                          sDevice = h2.a.d[idx];
-                          sBoard = h2.a.f1910e[idx];
-                          sProduct = h2.a.f1911f[idx];
-                          sBootloader = h2.a.f1912g[idx];
-                          sFingerprint = h2.a.alignFingerprintWithOsRelease(h2.a.h[idx]);
-                          sBuildId = h2.a.extractBuildIdFromFingerprint(sFingerprint);
-                          sBuildIncremental = h2.a.extractIncrementalFromFingerprint(sFingerprint);
-                          sAndroidId = "94a1c8e27b03d5f1";
-                          saveProfileToLocalProp(dataDir);
-                      }
                   }
 
-                  if (sBrand == null) {
+                  if (sBrand == null || sBrand.isEmpty()) {
                       int idx = 0;
                       sBrand = h2.a.f1907a[idx];
                       sManufacturer = h2.a.f1908b[idx];
@@ -1638,7 +1760,12 @@ jobs:
                       sBuildId = h2.a.extractBuildIdFromFingerprint(sFingerprint);
                       sBuildIncremental = h2.a.extractIncrementalFromFingerprint(sFingerprint);
                       sAndroidId = "94a1c8e27b03d5f1";
+                      if (dataDir != null) {
+                          saveProfileToLocalProp(dataDir);
+                      }
                   }
+
+                  sHttpAgent = h2.a.buildDalvikUserAgent(sModel, sBuildId);
 
                   if (sOptMaster && sOptDeviceSpoof) {
                       applyBuildSpoof(cl);
@@ -1660,6 +1787,17 @@ jobs:
                       XposedHelpers.setStaticObjectField(buildClass, "FINGERPRINT", sFingerprint);
                       XposedHelpers.setStaticObjectField(buildClass, "TAGS", "release-keys");
                       XposedHelpers.setStaticObjectField(buildClass, "TYPE", "user");
+                      XposedHelpers.setStaticObjectField(buildClass, "USER", "dpi");
+                      XposedHelpers.setStaticObjectField(buildClass, "HOST", "SWDD5612");
+                      if (Build.VERSION.SDK_INT >= 31) {
+                          try {
+                              XposedHelpers.setStaticObjectField(buildClass, "SKU", sModel);
+                              XposedHelpers.setStaticObjectField(buildClass, "ODM_SKU", sModel);
+                              XposedHelpers.setStaticObjectField(buildClass, "SOC_MANUFACTURER", "Qualcomm");
+                              XposedHelpers.setStaticObjectField(buildClass, "SOC_MODEL", "SM8650");
+                          } catch (Throwable ignored) {
+                          }
+                      }
                       if (sBuildId != null && !sBuildId.isEmpty()) {
                           XposedHelpers.setStaticObjectField(buildClass, "ID", sBuildId);
                           XposedHelpers.setStaticObjectField(buildClass, "DISPLAY", sBuildId + (sBuildIncremental != null ? "." + sBuildIncremental : ""));
@@ -1671,9 +1809,15 @@ jobs:
                           } catch (Throwable ignored) {
                           }
                       }
+                      if (sHttpAgent != null) {
+                          try {
+                              System.setProperty("http.agent", sHttpAgent);
+                          } catch (Throwable ignored) {
+                          }
+                      }
                       if (!sSpoofLogged) {
                           sSpoofLogged = true;
-                          c.log("SPOOF", "Consistent Build spoof active: " + sBrand + " / " + sModel
+                          c.log("SPOOF", "Consistent Build & http.agent spoof active: " + sBrand + " / " + sModel
                               + " / FP=" + sFingerprint + " / AndroidID=" + sAndroidId);
                       }
                   } catch (Throwable t) {
@@ -1688,7 +1832,6 @@ jobs:
                       case 0: // getInstallerPackageName
                           if (!sOptInstallerSpoof) return;
                           if (methodHookParam.args.length > 0 && Objects.equals(methodHookParam.args[0], this.f1996b)) {
-                              c.log("INSTALLER", "getInstallerPackageName -> com.android.vending | caller=" + c.getCallerInfo());
                               methodHookParam.setResult("com.android.vending");
                           }
                           return;
@@ -1721,12 +1864,10 @@ jobs:
                               String key = (String) methodHookParam.args[1];
                               if ("android_id".equals(key)) {
                                   if (sOptAndroidId && sAndroidId != null) {
-                                      c.log("ANDROID_ID", "Settings.Secure.getString(android_id) -> " + sAndroidId + " | caller=" + c.getCallerInfo());
                                       methodHookParam.setResult(sAndroidId);
                                   }
                               } else if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
                                   if (sOptMockHide) {
-                                      c.log("SETTINGS", "Hid Secure.getString(" + key + ") -> 0 | caller=" + c.getCallerInfo());
                                       methodHookParam.setResult("0");
                                   }
                               } else if ("enabled_accessibility_services".equals(key)) {
@@ -1742,7 +1883,6 @@ jobs:
                               String key = (String) methodHookParam.args[1];
                               if ("adb_enabled".equals(key) || "development_settings_enabled".equals(key) || "mock_location".equals(key)) {
                                   if (sOptMockHide) {
-                                      c.log("SETTINGS", "Hid setting " + key + " -> 0 | caller=" + c.getCallerInfo());
                                       methodHookParam.setResult(0);
                                   }
                               }
@@ -1758,8 +1898,9 @@ jobs:
                               else if ("ro.product.model".equals(prop) || "ro.product.system.model".equals(prop) || "ro.product.vendor.model".equals(prop) || "ro.product.odm.model".equals(prop)) spoofed = sModel;
                               else if ("ro.product.device".equals(prop) || "ro.product.system.device".equals(prop) || "ro.product.vendor.device".equals(prop) || "ro.product.odm.device".equals(prop)) spoofed = sDevice;
                               else if ("ro.product.board".equals(prop) || "ro.board.platform".equals(prop) || "ro.hardware".equals(prop)) spoofed = sBoard;
-                              else if ("ro.product.name".equals(prop) || "ro.product.system.name".equals(prop)) spoofed = sProduct;
+                              else if ("ro.product.name".equals(prop) || "ro.product.system.name".equals(prop) || "ro.product.vendor.name".equals(prop) || "ro.product.odm.name".equals(prop)) spoofed = sProduct;
                               else if ("ro.bootloader".equals(prop) || "ro.boot.bootloader".equals(prop)) spoofed = sBootloader;
+                              else if ("ro.boot.hardware.sku".equals(prop) || "ro.ril.oem.sno".equals(prop)) spoofed = sModel;
                               else if ("ro.build.fingerprint".equals(prop) || "ro.system.build.fingerprint".equals(prop) || "ro.vendor.build.fingerprint".equals(prop) || "ro.bootimage.build.fingerprint".equals(prop) || "ro.odm.build.fingerprint".equals(prop)) spoofed = sFingerprint;
                               else if ("ro.build.id".equals(prop) && sBuildId != null) spoofed = sBuildId;
                               else if ("ro.build.display.id".equals(prop) && sBuildId != null) spoofed = sBuildId + (sBuildIncremental != null ? "." + sBuildIncremental : "");
@@ -1774,7 +1915,6 @@ jobs:
                               else if ("ro.build.selinux".equals(prop)) spoofed = "1";
 
                               if (spoofed != null) {
-                                  c.log("SYSPROP", "SystemProperties.get(" + prop + ") -> " + spoofed + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(spoofed);
                               }
                           }
@@ -1787,7 +1927,6 @@ jobs:
                                       || path.contains("magisk") || path.contains("Superuser")
                                       || path.contains("kernelsu") || path.contains("apatch")
                                       || path.contains("lsposed") || path.contains("xposed"))) {
-                                  c.log("ROOT-CHECK", "Blocked File.exists(" + path + ") -> false | caller=" + c.getCallerInfo());
                                   methodHookParam.setResult(Boolean.FALSE);
                               }
                           }
@@ -1795,32 +1934,19 @@ jobs:
                       case 6: // PackageManager.getPackageInfo / getApplicationInfo
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                               String pkgName = (String) methodHookParam.args[0];
-                              int flags = (methodHookParam.args.length > 1 && methodHookParam.args[1] instanceof Integer)
-                                  ? (Integer) methodHookParam.args[1] : 0;
-                              if ("com.logistics.rider.hungerstation".equals(pkgName) && (flags & (0x40 | 0x8000000)) != 0) {
-                                  c.log("PKG-SIGN", "App queried its own signature! flags=0x" + Integer.toHexString(flags)
-                                      + " | caller=" + c.getCallerInfo(10));
-                              }
                               if (!sOpt1ShotExact && sOptRootHide && HIDDEN_PKGS.contains(pkgName)) {
-                                  c.log("PKG-CHECK", "Hid package query: " + pkgName + " | caller=" + c.getCallerInfo());
                                   methodHookParam.setThrowable(new PackageManager.NameNotFoundException(pkgName));
                               }
                           }
                           return;
-                      case 8: // Runtime.exec(String[] cmdarray, String[] envp, File dir)
+                      case 8: // Runtime.exec(String[] cmdarray, String[] envp, File dir) - single core overload!
                           if (sOpt1ShotExact || !sOptRootHide || sInInternalExec.get()) return;
-                          if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
-                              String cmdStr;
-                              if (methodHookParam.args[0] instanceof String[]) {
-                                  cmdStr = Arrays.toString((String[]) methodHookParam.args[0]);
-                              } else {
-                                  cmdStr = String.valueOf(methodHookParam.args[0]);
-                              }
+                          if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String[]) {
+                              String[] cmdArr = (String[]) methodHookParam.args[0];
+                              String cmdStr = Arrays.toString(cmdArr);
                               Map<String, String> envMap = new HashMap<>();
-                              String envLog = "";
                               if (methodHookParam.args.length > 1 && methodHookParam.args[1] instanceof String[]) {
                                   String[] envp = (String[]) methodHookParam.args[1];
-                                  envLog = " envp=" + Arrays.toString(envp);
                                   for (String e : envp) {
                                       if (e != null && e.contains("=")) {
                                           int eq = e.indexOf('=');
@@ -1828,15 +1954,9 @@ jobs:
                                       }
                                   }
                               }
-                              Process proc = createSanitizedProcessForCommand(cmdStr, envMap);
-                              if (proc != null) {
-                                  c.log("EXEC-FAKE", "Returned sanitized Process(" + proc.getClass().getSimpleName()
-                                      + ") for Runtime.exec(" + cmdStr + ")" + envLog
-                                      + " | caller=" + c.getCallerInfo());
-                                  methodHookParam.setResult(proc);
-                              } else {
-                                  c.log("EXEC-PASS", "Passed through Runtime.exec(" + cmdStr + ")" + envLog
-                                      + " | caller=" + c.getCallerInfo());
+                              String[] sanitizedCmd = buildRealSanitizedCommandArray(cmdStr, envMap);
+                              if (sanitizedCmd != null) {
+                                  methodHookParam.args[0] = sanitizedCmd;
                               }
                           }
                           return;
@@ -1851,8 +1971,8 @@ jobs:
                                       if (cn.contains("verifyRootIntegrity") || cn.contains("verifyHookIntegrity")
                                               || cn.contains("RiderSupportFeaturesImpl")
                                               || cn.contains("setFontWeight") || cn.contains("setLocaleList")
-                                              || cn.contains("ewG")
                                               || cn.contains("ViewLayerCompanionLayerOutlineProvider1")
+                                              || cn.contains("ewG")
                                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
                                           isIntegrityCrash = true;
@@ -1861,8 +1981,7 @@ jobs:
                                   }
                               }
                               if (isIntegrityCrash && sOptIntegrityBypass) {
-                                  c.log("CRASH-GUARD", "Intercepted & suppressed root-integrity crash on thread "
-                                      + ((Thread) methodHookParam.args[0]).getName() + " (" + t.getClass().getSimpleName() + ") - App kept alive!");
+                                  c.log("CRASH-GUARD", "Intercepted & suppressed integrity exception (" + t.getClass().getSimpleName() + ")");
                                   methodHookParam.setResult(null);
                                   return;
                               }
@@ -1871,57 +1990,49 @@ jobs:
                           return;
                       case 10: // System.exit / Runtime.exit / Process.killProcess
                           String exitArg = methodHookParam.args.length > 0 ? String.valueOf(methodHookParam.args[0]) : "";
-                          c.log("APP-EXIT", "App called " + methodHookParam.method.getName() + "(" + exitArg + ") | caller=" + c.getCallerInfo(10));
+                          c.log("APP-EXIT", "App called " + methodHookParam.method.getName() + "(" + exitArg + ") | caller=" + c.getCallerInfo(8));
                           return;
                       case 11: // ProcessBuilder.start()
                           if (sOpt1ShotExact || !sOptRootHide || sInInternalExec.get()) return;
                           if (methodHookParam.thisObject instanceof ProcessBuilder) {
                               ProcessBuilder pb = (ProcessBuilder) methodHookParam.thisObject;
                               List<String> cmdList = pb.command();
-                              String cmdStr = cmdList != null ? cmdList.toString() : "";
-                              Map<String, String> envMap = null;
-                              try {
-                                  envMap = pb.environment();
-                              } catch (Throwable ignored) {
+                              if (cmdList != null && !cmdList.isEmpty()) {
+                                  String cmdStr = cmdList.toString();
+                                  if (cmdStr.contains(".hs_") || cmdStr.contains("exit 1") || cmdStr.contains("echo 1")) {
+                                      return;
+                                  }
+                                  Map<String, String> envMap = null;
+                                  try {
+                                      envMap = pb.environment();
+                                  } catch (Throwable ignored) {
+                                  }
+                                  String[] sanitizedCmd = buildRealSanitizedCommandArray(cmdStr, envMap);
+                                  if (sanitizedCmd != null) {
+                                      pb.command(Arrays.asList(sanitizedCmd));
+                                  }
                               }
-                              Process proc = createSanitizedProcessForCommand(cmdStr, envMap);
-                              if (proc != null) {
-                                  c.log("EXEC-FAKE", "Returned sanitized Process(" + proc.getClass().getSimpleName()
-                                      + ") for ProcessBuilder.start(" + cmdStr + ") | caller=" + c.getCallerInfo());
-                                  methodHookParam.setResult(proc);
-                              }
+                          }
+                          return;
+                      case 14: // KeyStore.getCertificateChain - Block Incognia Hardware Key Attestation
+                          String alias = (methodHookParam.args != null && methodHookParam.args.length > 0) ? String.valueOf(methodHookParam.args[0]) : "?";
+                          String callerStack = c.getCallerInfo(8);
+                          if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass)
+                                  && (alias.startsWith("icg-") || callerStack.contains("com.incognia"))) {
+                              methodHookParam.setResult(null);
                           }
                           return;
                       case 15: // KeyGenParameterSpec$Builder.setAttestationChallenge(byte[])
-                               // CRITICAL FIX: Never throw ProviderException from setAttestationChallenge()!
-                               // Throwing inside our hook embedded XposedBridge frames into Throwable.getStackTrace()!
-                               // Instead, pass null as the challenge so Android KeyStore generates a genuine hardware keypair
-                               // WITHOUT the attestation extension (1.3.6.1.4.1.11129.2.1.17)!
-                          if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass)
-                                  && methodHookParam.args != null && methodHookParam.args.length > 0
-                                  && methodHookParam.args[0] != null) {
-                              String attCaller = c.getCallerInfo(10);
-                              methodHookParam.args[0] = null;
-                              c.log("KEYSTORE", "Stripped setAttestationChallenge(byte[]) -> null (clean non-attested key generation without exception!) | stack=" + attCaller);
+                          String attCaller = c.getCallerInfo(8);
+                          if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass) && attCaller.contains("com.incognia")) {
+                              methodHookParam.setThrowable(new ProviderException("Key attestation not supported"));
                           }
                           return;
-                      case 16: // FileInputStream(File) / FileInputStream(String) -> redirect /proc/self/maps & mounts to sanitized copy
-                          if (sOpt1ShotExact || !sOptRootHide || sInInternalExec.get()) return;
-                          if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
-                              String path = null;
-                              boolean isFileArg = methodHookParam.args[0] instanceof File;
-                              if (isFileArg) {
-                                  path = ((File) methodHookParam.args[0]).getPath();
-                              } else if (methodHookParam.args[0] instanceof String) {
-                                  path = (String) methodHookParam.args[0];
-                              }
-                              if (path != null && path.startsWith("/proc/")) {
-                                  File cleanFile = getSanitizedProcFile(path);
-                                  if (cleanFile != null) {
-                                      methodHookParam.args[0] = isFileArg ? cleanFile : cleanFile.getAbsolutePath();
-                                      c.log("ROOT-CHECK", "Redirected FileInputStream(" + path + ") -> sanitized proc file | caller=" + c.getCallerInfo(6));
-                                  }
-                              }
+                      case 16: // System.getProperty(String) / System.getProperty(String, String)
+                          if (!sOpt1ShotExact && sOptDeviceSpoof && sHttpAgent != null
+                                  && methodHookParam.args != null && methodHookParam.args.length > 0
+                                  && "http.agent".equals(methodHookParam.args[0])) {
+                              methodHookParam.setResult(sHttpAgent);
                           }
                           return;
                       default:
@@ -1939,51 +2050,21 @@ jobs:
                   } else if (this.f1995a == 7) { // Activity.onResume
                       if (methodHookParam.thisObject instanceof Activity) {
                           Activity act = (Activity) methodHookParam.thisObject;
+                          sCurrentActivity = act;
                           c.setTargetContext(act);
                           c.onNewDexClassLoaderCreated(act.getClassLoader());
                           c.log("ACTIVITY", "Opened screen: " + act.getClass().getName());
+                          if (sOptOkHttpFix) {
+                              d.triggerUiOrderAcceptIfVisible();
+                          }
                       }
-                  } else if (this.f1995a == 12) { // TextView.setText - Trace IAL403 / Unauthorized error origin
+                  } else if (this.f1995a == 12) { // TextView.setText
                       if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof CharSequence) {
                           String txt = methodHookParam.args[0].toString();
                           if (c.isInterestingErrorString(txt)) {
-                              c.log("IAL403-DETECT", "TextView displayed error: \"" + txt + "\" | stack=" + c.getCallerInfo(15));
-                          }
-                      }
-                  } else if (this.f1995a == 13) { // JSONObject(String) constructor & optString/getString
-                      if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
-                          String arg0 = (String) methodHookParam.args[0];
-                          if (c.isInterestingErrorString(arg0)) {
-                              c.log("IAL403-DETECT", "JSON payload detected: " + c.formatValueBrief(arg0, 800)
-                                  + " | stack=" + c.getCallerInfo(15));
-                          }
-                      }
-                      Object res = methodHookParam.getResult();
-                      if (res instanceof String && c.isInterestingErrorString((String) res)) {
-                          c.log("IAL403-DETECT", "JSON field read (" + (methodHookParam.args != null && methodHookParam.args.length > 0 ? methodHookParam.args[0] : "?")
-                              + ") -> \"" + res + "\" | stack=" + c.getCallerInfo(15));
-                      }
-                  } else if (this.f1995a == 14) { // KeyStore.getCertificateChain(String alias)
-                      String alias = (methodHookParam.args != null && methodHookParam.args.length > 0) ? String.valueOf(methodHookParam.args[0]) : "?";
-                      Object res = methodHookParam.getResult();
-                      if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass) && res instanceof Certificate[]) {
-                          Certificate[] chain = (Certificate[]) res;
-                          boolean hasAttestationExt = false;
-                          for (Certificate cert : chain) {
-                              if (cert instanceof X509Certificate) {
-                                  byte[] ext = ((X509Certificate) cert).getExtensionValue("1.3.6.1.4.1.11129.2.1.17");
-                                  if (ext != null && ext.length > 0) {
-                                      hasAttestationExt = true;
-                                      break;
-                                  }
-                              }
-                          }
-                          if (hasAttestationExt) {
-                              // Old cached hardware-attested key in keystore: return null so caller regenerates key with challenge=null
-                              methodHookParam.setResult(null);
-                              c.log("KEYSTORE", "Hid cached attested CertificateChain(alias=" + alias + ", len=" + chain.length + ") -> null so clean key is generated");
-                          } else {
-                              c.log("KEYSTORE", "Passed clean non-attested CertificateChain(alias=" + alias + ", len=" + chain.length + ")");
+                              c.log("IAL403-DETECT", "TextView displayed error: \"" + txt + "\"");
+                          } else if (sOptOkHttpFix && (txt.equalsIgnoreCase("Accept") || txt.contains("قبول") || txt.contains("موافقة"))) {
+                              d.triggerUiOrderAcceptIfVisible();
                           }
                       }
                   }
@@ -2013,48 +2094,10 @@ jobs:
           import i2.b;
           import i2.c;
           import java.io.File;
-          import java.io.FileInputStream;
-          import java.lang.reflect.Method;
           import java.security.KeyStore;
-          import java.util.Arrays;
-          import org.json.JSONObject;
 
           public final class XposedInit implements IXposedHookLoadPackage {
               private static final String TARGET_PKG = "com.logistics.rider.hungerstation";
-
-              private static boolean inspectAndHookClass(ClassLoader cl, String className, String targetMethod, int hookType, boolean logIfMissing) {
-                  try {
-                      Class<?> cls = XposedHelpers.findClassIfExists(className, cl);
-                      if (cls == null) {
-                          if (logIfMissing) {
-                              c.log("CLASS-CHECK", "Optional class not in this APK version: " + className);
-                          }
-                          return false;
-                      }
-                      Method[] methods = cls.getDeclaredMethods();
-                      int hooked = 0;
-                      StringBuilder sigs = new StringBuilder();
-                      for (Method m : methods) {
-                          if (targetMethod == null || targetMethod.equals(m.getName())) {
-                              if (hookType == 6 && m.getReturnType() != boolean.class) {
-                                  continue;
-                              }
-                              if (sigs.length() > 0) sigs.append("; ");
-                              sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
-                                  .append("->").append(m.getReturnType().getSimpleName());
-                              XposedBridge.hookMethod(m, new a(hookType));
-                              hooked++;
-                          }
-                      }
-                      if (hooked > 0) {
-                          c.log("HOOK-OK", "Hooked " + className + " (" + hooked + " methods): " + sigs);
-                          return true;
-                      }
-                  } catch (Throwable t) {
-                      c.logError("Hook_" + className, t);
-                  }
-                  return false;
-              }
 
               @Override
               public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -2064,11 +2107,8 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation & Real Exec) into package=" + lpparam.packageName
-                      + " process=" + lpparam.processName
-                      + " SDK=" + Build.VERSION.SDK_INT
-                      + " release=" + Build.VERSION.RELEASE
-                      + " realModel=" + Build.MODEL);
+                  c.log("INIT", "Loaded HS Panel v4.0 (OkHttp Request & Order Approval Engine + IAL403 Deep Bypass + Real UNIXProcess) into "
+                      + lpparam.packageName + " (SDK=" + Build.VERSION.SDK_INT + ")");
 
                   try {
                       b.initConsistentProfile(dataDir, cl);
@@ -2080,45 +2120,30 @@ jobs:
                       XposedHelpers.findAndHookMethod(ThreadGroup.class, "uncaughtException", Thread.class, Throwable.class, new b(9, null));
                       XposedHelpers.findAndHookMethod(Runtime.class, "exit", int.class, new b(10, null));
                       XposedHelpers.findAndHookMethod(Process.class, "killProcess", int.class, new b(10, null));
-                      c.log("HOOK-OK", "Hooked Crash Guard & Exit Detector");
                   } catch (Throwable t) {
                       c.logError("CrashHook", t);
                   }
 
-                  // 1. Hook BaseDexClassLoader constructors to catch secondary InMemoryDexClassLoader
                   try {
                       XposedBridge.hookAllConstructors(BaseDexClassLoader.class, new a(9));
-                      c.log("HOOK-OK", "Hooked BaseDexClassLoader.<init> for instant InMemoryDexClassLoader capture");
                   } catch (Throwable t) {
                       c.logError("BaseDexHook", t);
                   }
 
-                  // 2. Inspect main ClassLoader for secondary DEX targets, ViewLayer tamper class, Obfuscated OkHttp3, Compose, Integrity classes, Incognia
                   c.onNewDexClassLoaderCreated(cl);
 
-                  // 3. Hook HungerStation v4.2643.1+ obfuscated boolean root-check methods
-                  inspectAndHookClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 6, false);
-                  inspectAndHookClass(cl, "o.setCustomAttributeArray", "serializer", 6, false);
-                  inspectAndHookClass(cl, "o.setCustomAttributeArray", "write", 6, false);
+                  c.hookTargetMethodInClass(cl, "o.notifyChildrenUsingLookaheadCoordinatesWhilePlacing", "serializer", 6);
+                  c.hookTargetMethodInClass(cl, "o.setCustomAttributeArray", "serializer", 6);
+                  c.hookTargetMethodInClass(cl, "o.setCustomAttributeArray", "write", 6);
+                  c.hookTargetMethodInClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4);
 
-                  // 4. Hook BOTH verifyRootIntegrity$1.invokeSuspend AND verifyHookIntegrity$1.invokeSuspend!
-                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4, true);
-                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyHookIntegrity$1", "invokeSuspend", 4, true);
-
-                  // 5. Trace o.x5.serializer return values (type 5)
-                  inspectAndHookClass(cl, "o.x5", "serializer", 5, false);
-
-                  // 6. Hook JSONObject & KeyStore / KeyGenParameterSpec (clean non-throwing Attestation strip!)
                   try {
-                      XposedHelpers.findAndHookConstructor(JSONObject.class, String.class, new b(13, null));
-                      XposedHelpers.findAndHookMethod(JSONObject.class, "getString", String.class, new b(13, null));
-                      XposedHelpers.findAndHookMethod(JSONObject.class, "optString", String.class, new b(13, null));
-                      XposedHelpers.findAndHookMethod(JSONObject.class, "optString", String.class, String.class, new b(13, null));
                       XposedHelpers.findAndHookMethod(KeyStore.class, "getCertificateChain", String.class, new b(14, null));
                       XposedHelpers.findAndHookMethod(KeyGenParameterSpec.Builder.class, "setAttestationChallenge", byte[].class, new b(15, null));
-                      c.log("HOOK-OK", "Hooked JSONObject, KeyStore & KeyGenParameterSpec for clean Attestation strip");
+                      XposedHelpers.findAndHookMethod(System.class, "getProperty", String.class, new b(16, null));
+                      XposedHelpers.findAndHookMethod(System.class, "getProperty", String.class, String.class, new b(16, null));
                   } catch (Throwable t) {
-                      c.logError("JsonKeyStoreHook", t);
+                      c.logError("KeyStoreSysHook", t);
                   }
 
                   try {
@@ -2185,11 +2210,8 @@ jobs:
 
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
-                      // Hook only Runtime.exec(String[], String[], File) so overloaded exec() calls don't double-trigger
                       XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class, String[].class, File.class, new b(8, null));
                       XposedHelpers.findAndHookMethod(ProcessBuilder.class, "start", new b(11, null));
-                      XposedHelpers.findAndHookConstructor(FileInputStream.class, File.class, new b(16, null));
-                      XposedHelpers.findAndHookConstructor(FileInputStream.class, String.class, new b(16, null));
                   } catch (Throwable t) {
                       c.logError("FileExecHook", t);
                   }
@@ -2242,7 +2264,7 @@ jobs:
                   try {
                       if ("log".equals(method) && arg != null) {
                           synchronized (LogProvider.class) {
-                              if (f.exists() && f.length() > 2 * 1024 * 1024) {
+                              if (f.exists() && f.length() > 512 * 1024) {
                                   f.delete();
                               }
                               try (FileOutputStream fos = new FileOutputStream(f, true)) {
@@ -2259,6 +2281,7 @@ jobs:
                           SharedPreferences prefs = ctx.getSharedPreferences("com.logistics.rider.settings", Context.MODE_PRIVATE);
                           Bundle cfg = new Bundle();
                           cfg.putBoolean("opt_master", prefs.getBoolean("opt_master", true));
+                          cfg.putBoolean("opt_okhttp_fix", prefs.getBoolean("opt_okhttp_fix", true));
                           cfg.putBoolean("opt_1shot_exact", prefs.getBoolean("opt_1shot_exact", false));
                           cfg.putBoolean("opt_integrity", prefs.getBoolean("opt_integrity", true));
                           cfg.putBoolean("opt_skip_verify_coro", prefs.getBoolean("opt_skip_verify_coro", false));
@@ -2313,7 +2336,7 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Panel v3.6 in LSPosed for HungerStation." + NL
+                      + "1. Enable HS Panel v4.0 in LSPosed for HungerStation." + NL
                       + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
@@ -2420,6 +2443,7 @@ jobs:
                       Button btnClearLogs = findViewById(R.id.btn_clear_logs);
 
                       CheckBox cbMaster = findViewById(R.id.cb_master);
+                      CheckBox cbOkHttpFix = findViewById(R.id.cb_okhttp_fix);
                       CheckBox cb1ShotExact = findViewById(R.id.cb_1shot_exact);
                       CheckBox cbIntegrity = findViewById(R.id.cb_integrity);
                       CheckBox cbSkipVerifyCoro = findViewById(R.id.cb_skip_verify_coro);
@@ -2435,6 +2459,7 @@ jobs:
                       }
 
                       cbMaster.setChecked(prefs.getBoolean("opt_master", true));
+                      cbOkHttpFix.setChecked(prefs.getBoolean("opt_okhttp_fix", true));
                       cb1ShotExact.setChecked(prefs.getBoolean("opt_1shot_exact", false));
                       cbIntegrity.setChecked(prefs.getBoolean("opt_integrity", true));
                       cbSkipVerifyCoro.setChecked(prefs.getBoolean("opt_skip_verify_coro", false));
@@ -2445,6 +2470,7 @@ jobs:
                       cbMock.setChecked(prefs.getBoolean("opt_mock", true));
 
                       cbMaster.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_master", c));
+                      cbOkHttpFix.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_okhttp_fix", c));
                       cb1ShotExact.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_1shot_exact", c));
                       cbIntegrity.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_integrity", c));
                       cbSkipVerifyCoro.setOnCheckedChangeListener((v, c) -> saveBool(prefs, "opt_skip_verify_coro", c));
@@ -2602,7 +2628,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Panel v3.6 - Control &amp; Logs"
+                  android:text="HS Panel v4.0 - OkHttp &amp; Protection"
                   android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
@@ -2679,7 +2705,7 @@ jobs:
                           <TextView
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
-                              android:text="Active Protection Modules (قائمة الوظائف):"
+                              android:text="Active Protection &amp; OkHttp Modules (قائمة الوظائف):"
                               android:textColor="#90CAF9"
                               android:textStyle="bold"
                               android:textSize="14sp"
@@ -2694,11 +2720,19 @@ jobs:
                               android:checked="true" />
 
                           <CheckBox
+                              android:id="@+id/cb_okhttp_fix"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:textColor="#00E676"
+                              android:text="OkHttp Request Fix &amp; Auto-Approve Orders (ميزة OkHttp لإصلاح وموافقة الطلبات)"
+                              android:checked="true" />
+
+                          <CheckBox
                               android:id="@+id/cb_1shot_exact"
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFD54F"
-                              android:text="1Shot Exact Minimal Mode (وضع 1Shot الخفيف بدون اعتراض الأوامر)"
+                              android:text="1Shot Exact Minimal Mode (وضع 1Shot الخفيف)"
                               android:checked="false" />
 
                           <CheckBox
@@ -2706,7 +2740,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Bypass Root Integrity &amp; KeyStore Attestation (تخطي النزاهة وشهادة البوتلودر)"
+                              android:text="Bypass Root/Hook Integrity &amp; IAL403 (تخطي النزاهة وخطأ IAL403)"
                               android:checked="true" />
 
                           <CheckBox
@@ -2714,7 +2748,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#80CBC4"
-                              android:text="Skip verifyRootIntegrity Coroutine Directly (تخطي كوروتين الفحص بالكامل)"
+                              android:text="Skip verifyRootIntegrity Coroutine Directly (تخطي كوروتين الفحص مباشرة)"
                               android:checked="false" />
 
                           <CheckBox
@@ -2722,7 +2756,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Spoof Device Build &amp; SystemProperties (تزييف موديل وبصمة الجهاز)"
+                              android:text="Spoof Device Build &amp; HTTP User-Agent (تزييف الجهاز ووكيل الشبكة)"
                               android:checked="true" />
 
                           <CheckBox
@@ -2746,7 +2780,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Sanitize Real Shell Output &amp; /proc/self/maps (تنظيف مخرجات النظام وملفات الذاكرة)"
+                              android:text="Real UNIXProcess Shell Sanitizer (تنظيف أوامر النظام الحقيقية)"
                               android:checked="true" />
 
                           <CheckBox
@@ -2860,7 +2894,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Panel v3.6</string>
+              <string name="app_name">HS Panel v4.0</string>
           </resources>
           EOF
 
@@ -2911,7 +2945,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Panel v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation &amp; Real Exec)" />
+                      android:value="HS Panel v4.0 (OkHttp Request &amp; Order Approval Engine + IAL403 Deep Bypass + Real UNIXProcess)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -2985,7 +3019,7 @@ jobs:
                   minSdk 30
                   targetSdk 34
                   versionCode 12
-                  versionName "3.6"
+                  versionName "4.0"
               }
 
               signingConfigs {
@@ -3023,12 +3057,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v3.6.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v4.0.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v3.6-APK
-          path: output/HS-Panel-v3.6.apk
+          name: HS-Panel-v4.0-APK
+          path: output/HS-Panel-v4.0.apk
           if-no-files-found: error
