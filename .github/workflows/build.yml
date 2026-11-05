@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v4.0 (OkHttp Order & Request Fix + IAL403 Deep Bypass + Real UNIXProcess)
+    name: Build Signed HS Panel v4.1 (Crash Fix + OkHttp 403 Smart Bypass & Order Auto-Accept)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v4.0 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v4.1 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -189,15 +189,12 @@ jobs:
           import java.util.regex.Pattern;
 
           /**
-           * OkHttp Engine (محرك ميزة OkHttp لإصلاح طلبات الشبكة والموافقة التلقائية على الطلبات):
-           * 1. Hooks obfuscated & standard OkHttp RealInterceptorChain.proceed (o.insertOrIgnoreItem.write)
-           *    and Header Interceptors (o.getOpeningAnimation).
-           * 2. Sanitizes outgoing Request headers in-place (String[] namesAndValues) so no real Motorola/device
-           *    identifiers leak via User-Agent or X-Device-* headers.
-           * 3. Captures live Authorization Bearer tokens, XX-Request-Token, Log-Employee-User, and OkHttpClient/Chain
-           *    instances across ClassLoaders.
-           * 4. Automatically retries order-approval / dispatch / login requests inside OkHttp on transient 429/5xx errors.
-           * 5. Detects incoming order/dispatch offers in OkHttp responses and auto-approves them via OkHttp + UI backup.
+           * OkHttp Engine v4.1:
+           * - Deduplicates hooks by Class identity (never hooks RealInterceptorChain 6x).
+           * - Sanitizes outgoing Request headers in-place (String[] namesAndValues).
+           * - Captures live HungerStation OkHttpClient (o.TranslationsENABLEDCompanion).
+           * - Smart 403/429/5xx Retry in OkHttp (including stripping/refreshing XX-Request-Token on 403).
+           * - Auto-Accepts incoming orders via OkHttp & UI.
            */
           public final class d {
               private static final Set<String> sHookedOkHttpTargets = ConcurrentHashMap.newKeySet();
@@ -245,17 +242,16 @@ jobs:
                   if (cl == null) return;
                   sAppClassLoader = cl;
 
-                  // 1. Hook obfuscated OkHttp RealInterceptorChain.proceed: o.insertOrIgnoreItem.write(Request) -> Response
                   String[] chainCandidates = {
                       "o.insertOrIgnoreItem",
                       "okhttp3.internal.http.RealInterceptorChain"
                   };
                   for (String chainCn : chainCandidates) {
-                      String key = cl.hashCode() + "#" + chainCn;
-                      if (sHookedOkHttpTargets.contains(key)) continue;
                       try {
                           Class<?> chainCls = XposedHelpers.findClassIfExists(chainCn, cl);
                           if (chainCls == null) continue;
+                          String key = System.identityHashCode(chainCls) + "#" + chainCn;
+                          if (sHookedOkHttpTargets.contains(key)) continue;
                           sHookedOkHttpTargets.add(key);
                           int hookedCount = 0;
                           for (Method m : chainCls.getDeclaredMethods()) {
@@ -293,12 +289,11 @@ jobs:
                       }
                   }
 
-                  // 2. Hook HungerStation Header Interceptor (o.getOpeningAnimation) if present
-                  String hdrIntKey = cl.hashCode() + "#o.getOpeningAnimation";
-                  if (!sHookedOkHttpTargets.contains(hdrIntKey)) {
-                      try {
-                          Class<?> hdrCls = XposedHelpers.findClassIfExists("o.getOpeningAnimation", cl);
-                          if (hdrCls != null) {
+                  try {
+                      Class<?> hdrCls = XposedHelpers.findClassIfExists("o.getOpeningAnimation", cl);
+                      if (hdrCls != null) {
+                          String hdrIntKey = System.identityHashCode(hdrCls) + "#o.getOpeningAnimation";
+                          if (!sHookedOkHttpTargets.contains(hdrIntKey)) {
                               sHookedOkHttpTargets.add(hdrIntKey);
                               for (Method m : hdrCls.getDeclaredMethods()) {
                                   if (m.getParameterTypes().length == 1 && m.getReturnType() != void.class) {
@@ -306,7 +301,7 @@ jobs:
                                           @Override
                                           protected void beforeHookedMethod(MethodHookParam param) {
                                               if (b.sOptMaster && b.sOptDeviceSpoof) {
-                                                  b.applyBuildSpoof(cl);
+                                                  b.applyBuildSpoof(hdrCls.getClassLoader());
                                               }
                                           }
                                       });
@@ -314,8 +309,8 @@ jobs:
                               }
                               c.log("OKHTTP-HOOK", "Hooked OkHttp Header Interceptor (o.getOpeningAnimation)");
                           }
-                      } catch (Throwable ignored) {
                       }
+                  } catch (Throwable ignored) {
                   }
               }
 
@@ -336,6 +331,23 @@ jobs:
                   return null;
               }
 
+              private static void setFieldVal(Object obj, String fieldName, Object newVal) {
+                  if (obj == null || fieldName == null) return;
+                  Class<?> cls = obj.getClass();
+                  while (cls != null && cls != Object.class) {
+                      try {
+                          Field f = cls.getDeclaredField(fieldName);
+                          f.setAccessible(true);
+                          f.set(obj, newVal);
+                          return;
+                      } catch (NoSuchFieldException ignored) {
+                          cls = cls.getSuperclass();
+                      } catch (Throwable ignored) {
+                          break;
+                      }
+                  }
+              }
+
               private static String[] extractHeadersArray(Object headersObj) {
                   if (headersObj == null) return null;
                   try {
@@ -348,6 +360,20 @@ jobs:
                   } catch (Throwable ignored) {
                   }
                   return null;
+              }
+
+              private static void setHeadersArray(Object headersObj, String[] newArr) {
+                  if (headersObj == null || newArr == null) return;
+                  try {
+                      for (Field f : headersObj.getClass().getDeclaredFields()) {
+                          if (f.getType() == String[].class) {
+                              f.setAccessible(true);
+                              f.set(headersObj, newArr);
+                              return;
+                          }
+                      }
+                  } catch (Throwable ignored) {
+                  }
               }
 
               private static String formatHeadersFull(Object headersObj) {
@@ -586,6 +612,7 @@ jobs:
                           }
                       }
 
+                      // 1. Smart OkHttp Retry for Order Approval / Dispatch / Transient Errors (429 / 5xx)
                       if (b.sOptOkHttpFix && !sInRetryProceed.get() && isOrderApprovalOrDispatchUrl(url)
                               && ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method))) {
                           if (err != null || statusCode == 429 || (statusCode >= 500 && statusCode <= 599)) {
@@ -609,27 +636,28 @@ jobs:
                           }
                       }
 
+                      // 2. Deduplicate logging across the ~8 interceptors in the chain using sentRequestAtMillis + url
                       Object sentMillisObj = resObj != null ? getFieldVal(resObj, "sentRequestAtMillis") : null;
                       long sentMillis = (sentMillisObj instanceof Long) ? (Long) sentMillisObj : 0L;
                       if (url.startsWith("http://localhost")) {
                           return;
                       }
                       String dedupKey = method + ":" + url + ":" + sentMillis + ":" + statusCode;
+                      boolean alreadyLogged = false;
                       synchronized (sLoggedRequestKeys) {
                           if (sentMillis != 0L && sLoggedRequestKeys.contains(dedupKey)) {
-                              return;
-                          }
-                          if (sentMillis != 0L) {
+                              alreadyLogged = true;
+                          } else if (sentMillis != 0L) {
                               sLoggedRequestKeys.add(dedupKey);
                           }
                       }
 
                       String bodyPreview = null;
-                      if (resObj != null && (statusCode >= 400 || isOrderApprovalOrDispatchUrl(url) || url.contains("/iam-login/"))) {
+                      if (!alreadyLogged && resObj != null && (statusCode >= 400 || isOrderApprovalOrDispatchUrl(url) || url.contains("/iam-login/"))) {
                           bodyPreview = peekResponseBodySafe(resObj);
                       }
 
-                      if (statusCode >= 400) {
+                      if (!alreadyLogged && statusCode >= 400) {
                           String reqHeaders = finalReq != null ? formatHeadersFull(getFieldVal(finalReq, "headers")) : "[]";
                           String resHeaders = formatHeadersFull(getFieldVal(resObj, "headers"));
                           String reqBody = readRequestBodyString(finalReq);
@@ -638,7 +666,7 @@ jobs:
                               + (reqBody != null ? " | reqBody=" + reqBody : "")
                               + " | resHeaders=" + resHeaders
                               + (bodyPreview != null ? " | resBody=" + bodyPreview : ""));
-                      } else if (statusCode >= 200 && statusCode < 300) {
+                      } else if (!alreadyLogged && statusCode >= 200 && statusCode < 300) {
                           if (url.contains("/iam-login/v2/auth")) {
                               c.log("OKHTTP-FIX", "Login Auth Succeeded (HTTP " + statusCode + ") via OkHttp: " + url);
                           } else if (isOrderApprovalOrDispatchUrl(url)) {
@@ -646,6 +674,55 @@ jobs:
                                   + (bodyPreview != null ? " | body=" + c.formatValueBrief(bodyPreview) : ""));
                               if (b.sOptOkHttpFix && bodyPreview != null) {
                                   inspectAndAutoAcceptOrderJson(url, bodyPreview, finalReq);
+                              }
+                          }
+                      }
+
+                      // 3. Smart OkHttp 403 Bypass on /iam-login/v2/auth:
+                      //    If /iam-login/v2/auth returned 403 (e.g. due to XX-Request-Token block),
+                      //    automatically test a retry without XX-Request-Token on the network interceptor!
+                      if (b.sOptOkHttpFix && statusCode == 403 && !sInRetryProceed.get()
+                              && url.contains("/iam-login/v2/auth") && reqObj != null) {
+                          String reqUrl = String.valueOf(getFieldVal(reqObj, "url"));
+                          if (reqUrl.startsWith("https://")) {
+                              Object hdrObj = getFieldVal(reqObj, "headers");
+                              String[] nv = extractHeadersArray(hdrObj);
+                              if (nv != null && nv.length >= 2) {
+                                  int tokenIdx = -1;
+                                  for (int i = 0; i + 1 < nv.length; i += 2) {
+                                      if ("XX-Request-Token".equalsIgnoreCase(nv[i])) {
+                                          tokenIdx = i;
+                                          break;
+                                      }
+                                  }
+                                  if (tokenIdx >= 0) {
+                                      sInRetryProceed.set(Boolean.TRUE);
+                                      try {
+                                          String[] stripped = new String[nv.length - 2];
+                                          int dst = 0;
+                                          for (int i = 0; i < nv.length; i += 2) {
+                                              if (i == tokenIdx) continue;
+                                              stripped[dst++] = nv[i];
+                                              stripped[dst++] = nv[i + 1];
+                                          }
+                                          setHeadersArray(hdrObj, stripped);
+                                          setFieldVal(reqObj, "headers", hdrObj);
+                                          c.log("OKHTTP-FIX", "Testing OkHttp 403 Smart Retry (stripped XX-Request-Token) for " + reqUrl);
+                                          Object retryRes = XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
+                                          if (retryRes != null) {
+                                              Object rCodeObj = getFieldVal(retryRes, "code");
+                                              int rCode = (rCodeObj instanceof Integer) ? (Integer) rCodeObj : -1;
+                                              c.log("OKHTTP-FIX", "OkHttp 403 Smart Retry result -> HTTP " + rCode);
+                                              if (rCode >= 200 && rCode < 300) {
+                                                  param.setResult(retryRes);
+                                              }
+                                          }
+                                      } catch (Throwable ignored) {
+                                      } finally {
+                                          setHeadersArray(hdrObj, nv);
+                                          sInRetryProceed.set(Boolean.FALSE);
+                                      }
+                                  }
                               }
                           }
                       }
@@ -1001,42 +1078,38 @@ jobs:
               public static void onNewDexClassLoaderCreated(ClassLoader cl) {
                   if (cl == null) return;
 
-                  // A1. Block ONLY the real DexGuard tamper-flag setter classes:
-                  //     - o.ViewLayerCompanionLayerOutlineProvider1.serializer (discovered at IconCompatParcelizer:1926 in 55.txt!)
-                  //     - o.ewG.serializer (legacy 1Shot target)
-                  hookTargetMethodInClass(cl, "o.ViewLayerCompanionLayerOutlineProvider1", "serializer", 0);
+                  // A1. Secondary DEX tamper callback (o.setFontWeight.serializer(Object[])->void & legacy o.ewG.serializer):
+                  //     Block in beforeHookedMethod (mode=0) so o.setFontWeight.serializer never throws NullPointerException!
+                  //     NOTE: Do NOT hook o.ViewLayerCompanionLayerOutlineProvider1.serializer(long, long)->long (it is a Compose ViewLayer method)!
+                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 0);
                   hookTargetMethodInClass(cl, "o.ewG", "serializer", 0);
 
-                  // A2. Secondary DEX initializer (o.setFontWeight.serializer & o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer):
-                  //     CRITICAL FIX FOR 55.txt: Do NOT block o.setFontWeight.serializer! It initializes com.braze.enums.Gender$Companion.$$a!
-                  //     Blocking it caused NullPointerException at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer:1802 and poisoned sessionToken!
-                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 8);
+                  // A2. Secondary DEX initializer o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer()
+                  //     and o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer() (mode=7 suppresses any NPE in afterHookedMethod)
                   hookTargetMethodInClass(cl, "o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", 7);
+                  hookTargetMethodInClass(cl, "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds", "serializer", 7);
 
-                  // A3. Hook OkHttp Engine (always active when OkHttp Fix is enabled)
+                  // A3. Hook OkHttp Engine (deduplicated by Class identity)
                   d.hookOkHttpInClassLoader(cl);
 
                   if (b.sOpt1ShotExact) {
                       return;
                   }
 
-                  // B. Hook verifyHookIntegrity$1 & o.transaction1 (discovered at 55.txt line 30 & 43!)
-                  //    NOTE: Do NOT hook .a(), .b(), .c() of o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds, o.wakeScreenIfAppropriatelambda3,
-                  //    or o.changeUserlambda10 so SystemClock.elapsedRealtime() timing checks execute in <1ms!
+                  // B. Hook verifyHookIntegrity$1 & o.transaction1 boolean checks
                   hookTargetMethodInClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyHookIntegrity$1", "invokeSuspend", 10);
                   hookTargetMethodInClass(cl, "o.transaction1", null, 6);
-                  hookSessionTokenDiagnostic(cl);
 
                   // C. Hook Jetpack Compose AnnotatedString & TextStringSimpleNode for UI error & order detection
                   hookComposeAnnotatedString(cl);
               }
 
               public static synchronized void hookTargetMethodInClass(ClassLoader cl, String cn, String methodName, int hookMode) {
-                  String key = cl.hashCode() + "#" + cn + "#" + (methodName != null ? methodName : "*") + "#" + hookMode;
-                  if (sHookedClasses.contains(key)) return;
                   try {
                       Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
                       if (cls == null) return;
+                      String key = System.identityHashCode(cls) + "#" + cn + "#" + (methodName != null ? methodName : "*") + "#" + hookMode;
+                      if (sHookedClasses.contains(key)) return;
                       sHookedClasses.add(key);
                       Method[] methods = cls.getDeclaredMethods();
                       StringBuilder sigs = new StringBuilder();
@@ -1044,6 +1117,9 @@ jobs:
                       for (Method m : methods) {
                           if (methodName == null || methodName.equals(m.getName())) {
                               if (hookMode == 6 && m.getReturnType() != boolean.class) {
+                                  continue;
+                              }
+                              if (hookMode == 0 && m.getReturnType().isPrimitive() && m.getReturnType() != void.class) {
                                   continue;
                               }
                               if (sigs.length() > 0) sigs.append("; ");
@@ -1062,39 +1138,17 @@ jobs:
                   }
               }
 
-              private static synchronized void hookSessionTokenDiagnostic(ClassLoader cl) {
-                  String cn = "o.changeUserlambda10";
-                  String key = cl.hashCode() + "#" + cn + "#read";
-                  if (sHookedClasses.contains(key)) return;
-                  try {
-                      Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
-                      if (cls == null) return;
-                      sHookedClasses.add(key);
-                      for (Method m : cls.getDeclaredMethods()) {
-                          if ("read".equals(m.getName()) && m.getParameterTypes().length == 0) {
-                              XposedBridge.hookMethod(m, new XC_MethodHook() {
-                                  @Override
-                                  protected void afterHookedMethod(MethodHookParam param) {
-                                      log("SESSION-SHA", "GetAuthSessionTokenSha seed o.changeUserlambda10.read() -> " + param.getResult());
-                                  }
-                              });
-                          }
-                      }
-                  } catch (Throwable ignored) {
-                  }
-              }
-
               private static synchronized void hookComposeAnnotatedString(ClassLoader cl) {
                   String[] composeTargets = {
                       "androidx.compose.ui.text.AnnotatedString",
                       "androidx.compose.foundation.text.modifiers.TextStringSimpleNode"
                   };
                   for (String cn : composeTargets) {
-                      String key = cl.hashCode() + "#" + cn;
-                      if (sHookedClasses.contains(key)) continue;
                       try {
                           Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
                           if (cls == null) continue;
+                          String key = System.identityHashCode(cls) + "#" + cn;
+                          if (sHookedClasses.contains(key)) continue;
                           sHookedClasses.add(key);
                           for (Constructor<?> ctor : cls.getDeclaredConstructors()) {
                               XposedBridge.hookMethod(ctor, new XC_MethodHook() {
@@ -1162,6 +1216,7 @@ jobs:
           package i2;
 
           import de.robv.android.xposed.XC_MethodHook;
+          import java.lang.reflect.Member;
           import java.lang.reflect.Method;
 
           public final class a extends XC_MethodHook {
@@ -1171,19 +1226,34 @@ jobs:
                   this.f1994a = i3;
               }
 
+              private static Object getSafeDefaultForMethod(Member member) {
+                  if (!(member instanceof Method)) return null;
+                  Class<?> rt = ((Method) member).getReturnType();
+                  if (rt == void.class || !rt.isPrimitive()) return null;
+                  if (rt == boolean.class) return Boolean.FALSE;
+                  if (rt == long.class) return 0L;
+                  if (rt == int.class) return 0;
+                  if (rt == float.class) return 0.0f;
+                  if (rt == double.class) return 0.0d;
+                  if (rt == byte.class) return (byte) 0;
+                  if (rt == short.class) return (short) 0;
+                  if (rt == char.class) return '\0';
+                  return null;
+              }
+
               @Override
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // Tamper reporter setter in main DEX:
-                              // o.ViewLayerCompanionLayerOutlineProvider1.serializer(...) -> void
+                      case 0: // Secondary DEX tamper callback:
+                              // o.setFontWeight.serializer(Object[]) -> void
                               // o.ewG.serializer(...) -> void
                           if (!b.sOptIntegrityBypass && !b.sOpt1ShotExact) return;
                           String clsName = methodHookParam.method.getDeclaringClass().getName();
                           String mthName = methodHookParam.method.getName();
-                          methodHookParam.setResult(null);
-                          c.log("DEX-BYPASS", "Blocked Tamper Flag Setter: " + clsName + "." + mthName
-                              + " args=" + c.formatValueBrief(methodHookParam.args) + " -> null");
+                          methodHookParam.setResult(getSafeDefaultForMethod(methodHookParam.method));
+                          c.log("DEX-BYPASS", "Blocked Secondary-DEX Tamper Reporter: " + clsName + "." + mthName
+                              + " args=" + c.formatValueBrief(methodHookParam.args));
                           return;
 
                       case 2: // Location.isMock / isFromMockProvider
@@ -1220,13 +1290,13 @@ jobs:
                           }
                           return;
 
-                      case 7: // o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer() -> void
-                          if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
-                              methodHookParam.setResult(null);
+                      case 7: // o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer() & o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer()
+                          if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass
+                                  && "IconCompatParcelizer".equals(methodHookParam.method.getName())) {
+                              methodHookParam.setResult(getSafeDefaultForMethod(methodHookParam.method));
                           }
                           return;
 
-                      case 8: // o.setFontWeight.serializer(Object[]) -> let it run so Gender$Companion.$$a is initialized!
                       case 5:
                       case 9: // BaseDexClassLoader.<init>
                           return;
@@ -1251,16 +1321,12 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
-                  if (this.f1994a == 7 || this.f1994a == 8) {
+                  if (this.f1994a == 7) {
                       Throwable t = methodHookParam.getThrowable();
                       if (t != null) {
-                          c.log("DEX-BYPASS", "Suppressed exception in " + methodHookParam.method.getDeclaringClass().getName()
-                              + "." + methodHookParam.method.getName() + ": " + t.getClass().getSimpleName());
                           if (b.sOptIntegrityBypass || b.sOpt1ShotExact) {
-                              methodHookParam.setResult(null);
+                              methodHookParam.setResult(getSafeDefaultForMethod(methodHookParam.method));
                           }
-                      } else if (this.f1994a == 8) {
-                          c.log("DEX-BYPASS", "o.setFontWeight.serializer initialized Gender$Companion.$$a cleanly!");
                       }
                   } else if (this.f1994a == 4) {
                       Throwable t = methodHookParam.getThrowable();
@@ -1614,7 +1680,7 @@ jobs:
                       props.setProperty("opt_1shot_exact", String.valueOf(sOpt1ShotExact));
                       props.setProperty("opt_skip_verify_coro", String.valueOf(sOptSkipVerifyCoro));
                       try (FileOutputStream fos = new FileOutputStream(propFile)) {
-                          props.store(fos, "HS Rider Profile v4.0");
+                          props.store(fos, "HS Rider Profile v4.1");
                       }
                   } catch (Throwable ignored) {
                   }
@@ -1675,7 +1741,7 @@ jobs:
                               saveProfileToLocalProp(sDataDir);
                               syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v4.0: " + sBrand + " / " + sModel
+                              c.log("PREFS", "Synced settings & profile from HS Panel v4.1: " + sBrand + " / " + sModel
                                   + " (OkHttpFix=" + sOptOkHttpFix + ", 1ShotExact=" + sOpt1ShotExact + ")");
                           }
                       }
@@ -1971,7 +2037,6 @@ jobs:
                                       if (cn.contains("verifyRootIntegrity") || cn.contains("verifyHookIntegrity")
                                               || cn.contains("RiderSupportFeaturesImpl")
                                               || cn.contains("setFontWeight") || cn.contains("setLocaleList")
-                                              || cn.contains("ViewLayerCompanionLayerOutlineProvider1")
                                               || cn.contains("ewG")
                                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
@@ -2107,7 +2172,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded HS Panel v4.0 (OkHttp Request & Order Approval Engine + IAL403 Deep Bypass + Real UNIXProcess) into "
+                  c.log("INIT", "Loaded HS Panel v4.1 (Crash Fix + OkHttp 403 Smart Bypass & Order Auto-Accept) into "
                       + lpparam.packageName + " (SDK=" + Build.VERSION.SDK_INT + ")");
 
                   try {
@@ -2336,7 +2401,7 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Panel v4.0 in LSPosed for HungerStation." + NL
+                      + "1. Enable HS Panel v4.1 in LSPosed for HungerStation." + NL
                       + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
@@ -2628,7 +2693,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Panel v4.0 - OkHttp &amp; Protection"
+                  android:text="HS Panel v4.1 - OkHttp &amp; Protection"
                   android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
@@ -2894,7 +2959,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Panel v4.0</string>
+              <string name="app_name">HS Panel v4.1</string>
           </resources>
           EOF
 
@@ -2945,7 +3010,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Panel v4.0 (OkHttp Request &amp; Order Approval Engine + IAL403 Deep Bypass + Real UNIXProcess)" />
+                      android:value="HS Panel v4.1 (Crash Fix + OkHttp 403 Smart Bypass &amp; Order Auto-Accept)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -3018,8 +3083,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 12
-                  versionName "4.0"
+                  versionCode 13
+                  versionName "4.1"
               }
 
               signingConfigs {
@@ -3057,12 +3122,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v4.0.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v4.1.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v4.0-APK
-          path: output/HS-Panel-v4.0.apk
+          name: HS-Panel-v4.1-APK
+          path: output/HS-Panel-v4.1.apk
           if-no-files-found: error
