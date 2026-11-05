@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Signed HS Panel v3.5 (IAL403 Deep Fix + Real Sanitized Exec + KeyStore & OkHttp Hook)
+    name: Build Signed HS Panel v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation & Real Exec)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Clean Legacy Artifacts & Inject HS Panel v3.5 Sources
+      - name: Clean Legacy Artifacts & Inject HS Panel v3.6 Sources
         run: |
           set -e
           rm -rf app/src/main/classes.dex \
@@ -107,11 +107,6 @@ jobs:
                   return sb.toString();
               }
 
-              /**
-               * Ensures the Android version embedded in Build.FINGERPRINT (e.g. ":14/")
-               * matches the real Build.VERSION.RELEASE (e.g. ":16/" on SDK 36) so server
-               * and Incognia checks never detect a fingerprint/OS version mismatch.
-               */
               public static String alignFingerprintWithOsRelease(String fp) {
                   if (fp == null || fp.isEmpty()) return fp;
                   String rel = Build.VERSION.RELEASE;
@@ -173,6 +168,7 @@ jobs:
           import java.lang.reflect.Field;
           import java.lang.reflect.Method;
           import java.lang.reflect.Modifier;
+          import java.nio.charset.Charset;
           import java.nio.charset.StandardCharsets;
           import java.text.SimpleDateFormat;
           import java.util.ArrayList;
@@ -188,6 +184,7 @@ jobs:
               private static final List<String> sPendingProviderLines = new ArrayList<>();
               private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
               private static final Set<String> sHookedClasses = ConcurrentHashMap.newKeySet();
+              private static final Set<Integer> sLoggedHttpResHashes = ConcurrentHashMap.newKeySet();
               private static volatile Context sTargetContext;
               public static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
               private static final String NL = String.valueOf((char) 10);
@@ -226,7 +223,8 @@ jobs:
                       || "HTTP-RES".equals(tag) || "HTTP-ERR-BODY".equals(tag) || "SUPPORT-TRACE".equals(tag)
                       || "INCOGNIA-TRACE".equals(tag) || "X5-TRACE".equals(tag) || "HOOK-OK".equals(tag)
                       || "DEX-GUARD".equals(tag) || "NPE-TRACE".equals(tag) || "EXEC-FAKE".equals(tag)
-                      || "PKG-SIGN".equals(tag) || "KEYSTORE".equals(tag) || "CERT-HASH".equals(tag);
+                      || "PKG-SIGN".equals(tag) || "KEYSTORE".equals(tag) || "CERT-HASH".equals(tag)
+                      || "SHA-TRACE".equals(tag);
                   if (count > 10 && !isUnlimited) {
                       return;
                   }
@@ -290,9 +288,14 @@ jobs:
                       if (cls.startsWith("java.") || cls.startsWith("android.")
                               || cls.startsWith("dalvik.") || cls.startsWith("de.robv.")
                               || cls.startsWith("org.lsposed.") || cls.startsWith("i2.")
+                              || cls.startsWith("i3.") || cls.startsWith("j3.") || cls.startsWith("h2.b")
                               || cls.startsWith("com.logistics.rider.lsposed")
                               || cls.contains("LspHooker") || cls.contains("XC_MethodHook")
+                              || cls.contains("XposedBridge") || cls.contains("HookBridge")
+                              || cls.contains("Vector_")
                               || "intercept".equals(mth) || "proceed".equals(mth)
+                              || "callback".equals(mth) || "invokeOriginalMethod".equals(mth)
+                              || mth.startsWith("handleBefore") || mth.startsWith("handleAfter")
                               || mth.startsWith("callBefore") || mth.startsWith("callAfter")
                               || mth.startsWith("handleHookedMethod")) {
                           continue;
@@ -313,17 +316,25 @@ jobs:
                   int lim = Math.min(stack.length, maxFrames);
                   for (int i = 0; i < lim; i++) {
                       String cls = stack[i].getClassName();
+                      String mth = stack[i].getMethodName();
                       if (cls.startsWith("de.robv.") || cls.startsWith("org.lsposed.") || cls.startsWith("i2.")
-                              || cls.contains("LspHooker")) {
+                              || cls.startsWith("i3.") || cls.startsWith("j3.")
+                              || cls.contains("LspHooker") || cls.contains("XposedBridge")
+                              || cls.contains("HookBridge") || cls.contains("Vector_")
+                              || "callback".equals(mth) || "invokeOriginalMethod".equals(mth)) {
                           continue;
                       }
                       if (sb.length() > 0) sb.append(" <- ");
-                      sb.append(cls).append(".").append(stack[i].getMethodName()).append(":").append(stack[i].getLineNumber());
+                      sb.append(cls).append(".").append(mth).append(":").append(stack[i].getLineNumber());
                   }
                   return sb.toString();
               }
 
               public static String dumpObjectFields(Object obj) {
+                  return dumpObjectFields(obj, 260);
+              }
+
+              public static String dumpObjectFields(Object obj, int maxStrLen) {
                   if (obj == null) return "null";
                   StringBuilder sb = new StringBuilder();
                   Class<?> cls = obj.getClass();
@@ -335,7 +346,7 @@ jobs:
                           f.setAccessible(true);
                           Object val = Modifier.isStatic(f.getModifiers()) ? f.get(null) : f.get(obj);
                           if (count > 0) sb.append(", ");
-                          sb.append(f.getName()).append("=").append(formatValueBrief(val));
+                          sb.append(f.getName()).append("=").append(formatValueBrief(val, maxStrLen));
                           count++;
                       }
                       Class<?> sup = cls.getSuperclass();
@@ -345,7 +356,7 @@ jobs:
                               f.setAccessible(true);
                               Object val = f.get(obj);
                               if (count > 0) sb.append(", ");
-                              sb.append("super.").append(f.getName()).append("=").append(formatValueBrief(val));
+                              sb.append("super.").append(f.getName()).append("=").append(formatValueBrief(val, maxStrLen));
                               count++;
                           }
                       }
@@ -356,15 +367,29 @@ jobs:
               }
 
               public static String formatValueBrief(Object val) {
+                  return formatValueBrief(val, 260);
+              }
+
+              public static String formatValueBrief(Object val, int maxStrLen) {
                   if (val == null) return "null";
+                  if (val instanceof int[]) {
+                      return Arrays.toString((int[]) val);
+                  }
+                  if (val instanceof byte[]) {
+                      byte[] b = (byte[]) val;
+                      if (b.length <= 64) return Arrays.toString(b);
+                      return "byte[" + b.length + "]";
+                  }
                   if (val instanceof Object[]) {
                       Object[] arr = (Object[]) val;
                       StringBuilder sb = new StringBuilder("[");
-                      int lim = Math.min(arr.length, 8);
+                      int lim = Math.min(arr.length, 10);
                       for (int i = 0; i < lim; i++) {
                           if (i > 0) sb.append(", ");
                           if (arr[i] instanceof Object[]) {
                               sb.append(Arrays.deepToString((Object[]) arr[i]));
+                          } else if (arr[i] instanceof int[]) {
+                              sb.append(Arrays.toString((int[]) arr[i]));
                           } else {
                               sb.append(arr[i] != null ? arr[i].getClass().getSimpleName() + ":" + String.valueOf(arr[i]) : "null");
                           }
@@ -374,7 +399,7 @@ jobs:
                       return sb.toString();
                   }
                   String s = String.valueOf(val);
-                  if (s.length() > 260) s = s.substring(0, 260) + "...";
+                  if (s.length() > maxStrLen) s = s.substring(0, maxStrLen) + "...";
                   return s.replace("\n", "\\n").replace("\r", "");
               }
 
@@ -390,30 +415,73 @@ jobs:
               public static void onNewDexClassLoaderCreated(ClassLoader cl) {
                   if (cl == null) return;
 
-                  // A1. Secondary DEX tamper callback (1Shot equivalent in v4.2643.1: o.setFontWeight.serializer(Object[])->void)
-                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 0);
+                  // A1. Secondary DEX initializer o.setFontWeight.serializer(Object[])->void:
+                  //     MUST use mode 8 (let it execute to initialize com.braze.enums.Gender$Companion.$$a & state,
+                  //     and only catch exceptions in afterHookedMethod! Blocking it in beforeHookedMethod caused
+                  //     NullPointerException at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.serializer:1802!)
+                  hookTargetMethodInClass(cl, "o.setFontWeight", "serializer", 8);
                   hookTargetMethodInClass(cl, "o.ewG", "serializer", 0);
 
-                  // A2. Secondary DEX initializer o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer():
-                  //     Let it run so o.setFontWeight.serializer is reached & state is initialized, OR block if user enabled direct skip;
-                  //     Always catch any Throwable in afterHookedMethod so it never crashes!
+                  // A2. v4.2643.1 Tamper Reporter discovered at o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds.IconCompatParcelizer:1926:
+                  //     o.ViewLayerCompanionLayerOutlineProvider1 -> RemoteActionCompatParcelizer -> serializer()
+                  hookViewLayerTamperClass(cl);
+
+                  // A3. Secondary DEX caller o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer()
                   hookTargetMethodInClass(cl, "o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs", "IconCompatParcelizer", 7);
 
                   if (b.sOpt1ShotExact) {
                       return;
                   }
 
-                  // B. Hook obfuscated RiderSupportFeaturesImpl & integrity helper classes discovered in 39.txt
+                  // B. Hook obfuscated RiderSupportFeaturesImpl & integrity classes (WITHOUT hooking helper methods a/b/c!)
                   hookObfuscatedIntegrityClasses(cl);
 
-                  // C. Hook Jetpack Compose AnnotatedString & TextStringSimpleNode to catch exact stack trace when "IAL403" is created
+                  // C. Hook Jetpack Compose AnnotatedString & TextStringSimpleNode
                   hookComposeAnnotatedString(cl);
 
-                  // D. Hook Obfuscated OkHttp3 RealInterceptorChain (o.insertOrIgnoreItem.write) & Header Interceptor (o.getOpeningAnimation)
+                  // D. Hook Obfuscated OkHttp3 RealInterceptorChain & read full 403 error headers/body
                   hookOkHttpClasses(cl);
 
                   // E. Hook Incognia SDK entry points
                   hookIncogniaClasses(cl);
+              }
+
+              private static synchronized void hookViewLayerTamperClass(ClassLoader cl) {
+                  String cn = "o.ViewLayerCompanionLayerOutlineProvider1";
+                  if (sHookedClasses.contains(cn)) return;
+                  try {
+                      Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
+                      if (cls == null) return;
+                      sHookedClasses.add(cn);
+
+                      // Hook all methods on o.ViewLayerCompanionLayerOutlineProvider1 (especially serializer / RemoteActionCompatParcelizer)
+                      for (Method m : cls.getDeclaredMethods()) {
+                          String mName = m.getName();
+                          if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) continue;
+                          int mode = ("serializer".equals(mName) && m.getReturnType() == void.class) ? 0 : 8;
+                          XposedBridge.hookMethod(m, new a(mode));
+                          log("HOOK-OK", "Hooked ViewLayer tamper method " + cn + "." + mName
+                              + Arrays.toString(m.getParameterTypes()) + "->" + m.getReturnType().getSimpleName()
+                              + " (mode=" + mode + ")");
+                      }
+
+                      // Also inspect static field RemoteActionCompatParcelizer if it holds a delegate instance
+                      for (Field f : cls.getDeclaredFields()) {
+                          if (Modifier.isStatic(f.getModifiers())) {
+                              f.setAccessible(true);
+                              Object val = f.get(null);
+                              Class<?> fieldType = val != null ? val.getClass() : f.getType();
+                              if (fieldType != null && fieldType != Object.class && fieldType != String.class
+                                      && !fieldType.isPrimitive() && !fieldType.isArray()
+                                      && !fieldType.getName().startsWith("java.")
+                                      && !fieldType.getName().startsWith("android.")) {
+                                  hookTargetMethodInClass(cl, fieldType.getName(), "serializer", 0);
+                              }
+                          }
+                      }
+                  } catch (Throwable t) {
+                      logError("HookViewLayer", t);
+                  }
               }
 
               private static synchronized void hookTargetMethodInClass(ClassLoader cl, String cn, String methodName, int hookMode) {
@@ -427,16 +495,19 @@ jobs:
                       StringBuilder sigs = new StringBuilder();
                       int count = 0;
                       for (Method m : methods) {
-                          if (methodName.equals(m.getName())) {
+                          if (methodName == null || methodName.equals(m.getName())) {
+                              String mName = m.getName();
+                              if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) continue;
                               if (sigs.length() > 0) sigs.append("; ");
-                              sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
+                              sigs.append(mName).append(Arrays.toString(m.getParameterTypes()))
                                   .append("->").append(m.getReturnType().getSimpleName());
                               XposedBridge.hookMethod(m, new a(hookMode));
                               count++;
                           }
                       }
                       if (count > 0) {
-                          log("DEX-GUARD", "Hooked " + cn + "." + methodName + " (mode=" + hookMode + ", " + count + " methods): " + sigs
+                          log("DEX-GUARD", "Hooked " + cn + "." + (methodName != null ? methodName : "*")
+                              + " (mode=" + hookMode + ", " + count + " methods): " + sigs
                               + " | loader=" + cls.getClassLoader().getClass().getName());
                       }
                   } catch (Throwable t) {
@@ -449,7 +520,12 @@ jobs:
                       "o.r8lambdaFCGRAg6MbUuOq_lpWWSN4eMkQA",
                       "o.r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds",
                       "o.wakeScreenIfAppropriatelambda3",
-                      "o.changeUserlambda10"
+                      "o.changeUserlambda10",
+                      "o.transaction1",
+                      "io.reactivex.internal.operators.single.SingleJust",
+                      "com.mapbox.geojson.constants.GeoJsonConstants",
+                      "com.roadrunner.secure.certificate.GetAuthSessionTokenShaImpl",
+                      "com.roadrunner.secure.certificate.GetAuthSessionTokenShaImpl$invoke$2"
                   };
                   for (String cn : targets) {
                       if (sHookedClasses.contains(cn)) continue;
@@ -461,19 +537,49 @@ jobs:
                           StringBuilder sigs = new StringBuilder();
                           int hooked = 0;
                           for (Method m : methods) {
+                              String mName = m.getName();
+                              // CRITICAL: Never hook string/int decryption loop helpers a/b/c!
+                              // Hooking a/b/c caused 500+ synchronous IPC logs & a 4-second freeze during Login!
+                              if ("a".equals(mName) || "b".equals(mName) || "c".equals(mName)) {
+                                  continue;
+                              }
+                              if (cn.endsWith("SingleJust") && !"RemoteActionCompatParcelizer".equals(mName)) {
+                                  continue;
+                              }
+                              if (cn.endsWith("GeoJsonConstants") && !"read".equals(mName)) {
+                                  continue;
+                              }
                               if (sigs.length() > 0) sigs.append("; ");
-                              sigs.append(m.getName()).append(Arrays.toString(m.getParameterTypes()))
+                              sigs.append(mName).append(Arrays.toString(m.getParameterTypes()))
                                   .append("->").append(m.getReturnType().getSimpleName());
                               XposedBridge.hookMethod(m, new XC_MethodHook() {
                                   @Override
+                                  protected void beforeHookedMethod(MethodHookParam param) {
+                                      String mn = param.method.getName();
+                                      // If sOptSkipVerifyCoro is enabled, block RiderSupportFeaturesImpl integrity launchers directly
+                                      if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass
+                                              && "o.r8lambdaFCGRAg6MbUuOq_lpWWSN4eMkQA".equals(cn)
+                                              && ((Method) param.method).getReturnType() == void.class
+                                              && (param.args == null || param.args.length == 0)) {
+                                          param.setResult(null);
+                                          log("BYPASS", "Blocked RiderSupportFeaturesImpl launcher " + cn + "." + mn + "()");
+                                      }
+                                  }
+
+                                  @Override
                                   protected void afterHookedMethod(MethodHookParam param) {
-                                      String mName = param.method.getName();
+                                      String mn = param.method.getName();
                                       Object res = param.getResult();
                                       Throwable thr = param.getThrowable();
-                                      log("SUPPORT-TRACE", cn + "." + mName
-                                          + " args=" + formatValueBrief(param.args)
-                                          + " -> result=" + formatValueBrief(res)
-                                          + (thr != null ? " err=" + thr : "")
+                                      String extra = "";
+                                      if (cn.contains("GetAuthSessionTokenShaImpl") && param.thisObject != null) {
+                                          extra = " | this=" + dumpObjectFields(param.thisObject, 500);
+                                      }
+                                      log("SUPPORT-TRACE", cn + "." + mn
+                                          + " args=" + formatValueBrief(param.args, 400)
+                                          + " -> result=" + formatValueBrief(res, 400)
+                                          + (thr != null ? " err=" + thr + " stack=" + formatTopStack(thr, 8) : "")
+                                          + extra
                                           + " | caller=" + getCallerInfo(6));
                                       if (thr != null && b.sOptIntegrityBypass && cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")) {
                                           Class<?> rt = ((Method) param.method).getReturnType();
@@ -526,7 +632,6 @@ jobs:
               }
 
               private static synchronized void hookOkHttpClasses(ClassLoader cl) {
-                  // 1. Hook obfuscated OkHttp RealInterceptorChain.proceed: o.insertOrIgnoreItem.write (discovered in 39.txt line 113!)
                   String chainCn = "o.insertOrIgnoreItem";
                   if (!sHookedClasses.contains(chainCn)) {
                       try {
@@ -552,34 +657,6 @@ jobs:
                           logError("HookOkHttpChain", t);
                       }
                   }
-
-                  // 2. Also hook okio.internal.ResourceFileSystem$$ExternalSyntheticLambda0.invoke to inspect header/cert values
-                  String hdrLambdaCn = "okio.internal.ResourceFileSystem$$ExternalSyntheticLambda0";
-                  if (!sHookedClasses.contains(hdrLambdaCn)) {
-                      try {
-                          Class<?> hlCls = XposedHelpers.findClassIfExists(hdrLambdaCn, cl);
-                          if (hlCls != null) {
-                              sHookedClasses.add(hdrLambdaCn);
-                              for (Method m : hlCls.getDeclaredMethods()) {
-                                  if ("invoke".equals(m.getName())) {
-                                      XposedBridge.hookMethod(m, new XC_MethodHook() {
-                                          @Override
-                                          protected void afterHookedMethod(MethodHookParam param) {
-                                              Object res = param.getResult();
-                                              if (res instanceof String || (res != null && res.toString().length() < 300)) {
-                                                  log("CERT-HASH", "HeaderLambda.invoke(" + formatValueBrief(param.args)
-                                                      + ") -> " + formatValueBrief(res)
-                                                      + " | this=" + dumpObjectFields(param.thisObject));
-                                              }
-                                          }
-                                      });
-                                  }
-                              }
-                              log("HOOK-OK", "Hooked Header/Cert Lambda (ResourceFileSystem$$ExternalSyntheticLambda0)");
-                          }
-                      } catch (Throwable ignored) {
-                      }
-                  }
               }
 
               private static final ThreadLocal<Boolean> sInspectingHttp = new ThreadLocal<Boolean>() {
@@ -589,45 +666,113 @@ jobs:
                   }
               };
 
-              private static void inspectObfuscatedOkHttpCall(Object chainObj, Object req, Object res, Throwable err) {
-                  if (sInspectingHttp.get()) return;
-                  sInspectingHttp.set(Boolean.TRUE);
+              private static String peekResponseBodyString(Object resObj) {
+                  if (resObj == null) return "null";
                   try {
-                      // Only log at the top-level interceptor (or when response code >= 400) to avoid 5x duplicate logs per chain
-                      int chainIndex = -1;
-                      if (chainObj != null) {
-                          for (Field f : chainObj.getClass().getDeclaredFields()) {
-                              if (f.getType() == int.class) {
-                                  f.setAccessible(true);
-                                  int val = f.getInt(chainObj);
-                                  if (val >= 0 && val <= 20) {
-                                      chainIndex = val;
+                      Field bodyField = null;
+                      for (Field f : resObj.getClass().getDeclaredFields()) {
+                          if ("body".equals(f.getName())) {
+                              bodyField = f;
+                              break;
+                          }
+                      }
+                      if (bodyField == null) return "no-body-field";
+                      bodyField.setAccessible(true);
+                      Object bodyObj = bodyField.get(resObj);
+                      if (bodyObj == null) return "null";
+
+                      // Find BufferedSource returned by zero-arg method on ResponseBody
+                      Object sourceObj = null;
+                      for (Method m : bodyObj.getClass().getMethods()) {
+                          if (m.getParameterTypes().length == 0 && m.getReturnType() != void.class
+                                  && m.getReturnType() != long.class && m.getReturnType() != int.class
+                                  && m.getReturnType() != String.class && m.getReturnType() != Class.class
+                                  && !m.getName().equals("toString") && !m.getName().equals("hashCode")
+                                  && !m.getName().equals("close")) {
+                              try {
+                                  Object cand = m.invoke(bodyObj);
+                                  if (cand != null) {
+                                      // Check if cand has a clone() or buffer method
+                                      for (Method sm : cand.getClass().getMethods()) {
+                                          if ("clone".equals(sm.getName()) && sm.getParameterTypes().length == 0) {
+                                              sourceObj = cand;
+                                              break;
+                                          }
+                                      }
+                                  }
+                              } catch (Throwable ignored) {
+                              }
+                              if (sourceObj != null) break;
+                          }
+                      }
+                      if (sourceObj != null) {
+                          // Request up to 8192 bytes into buffer without consuming it
+                          for (Method m : sourceObj.getClass().getMethods()) {
+                              Class<?>[] pts = m.getParameterTypes();
+                              if (pts.length == 1 && pts[0] == long.class && m.getReturnType() == boolean.class) {
+                                  try {
+                                      m.invoke(sourceObj, 8192L);
                                       break;
+                                  } catch (Throwable ignored) {
+                                  }
+                              }
+                          }
+                          // Clone the okio.Buffer and read String
+                          Method cloneMth = sourceObj.getClass().getMethod("clone");
+                          Object clonedBuf = cloneMth.invoke(sourceObj);
+                          if (clonedBuf != null) {
+                              for (Method bm : clonedBuf.getClass().getMethods()) {
+                                  if (bm.getReturnType() == String.class && bm.getParameterTypes().length == 1
+                                          && bm.getParameterTypes()[0] == Charset.class) {
+                                      return (String) bm.invoke(clonedBuf, StandardCharsets.UTF_8);
+                                  }
+                              }
+                              for (Method bm : clonedBuf.getClass().getMethods()) {
+                                  if (bm.getReturnType() == byte[].class && bm.getParameterTypes().length == 0) {
+                                      byte[] bytes = (byte[]) bm.invoke(clonedBuf);
+                                      if (bytes != null) return new String(bytes, StandardCharsets.UTF_8);
                                   }
                               }
                           }
                       }
+                      return dumpObjectFields(bodyObj, 600);
+                  } catch (Throwable t) {
+                      return "peekErr:" + t.getClass().getSimpleName() + ":" + t.getMessage();
+                  }
+              }
 
-                      String reqSummary = req != null ? dumpObjectFields(req) : "null";
+              private static void inspectObfuscatedOkHttpCall(Object chainObj, Object req, Object res, Throwable err) {
+                  if (sInspectingHttp.get()) return;
+                  sInspectingHttp.set(Boolean.TRUE);
+                  try {
                       if (res != null) {
                           int statusCode = -1;
+                          Object netRes = null;
                           for (Field f : res.getClass().getDeclaredFields()) {
-                              if (f.getType() == int.class) {
-                                  f.setAccessible(true);
-                                  int v = f.getInt(res);
-                                  if (v >= 100 && v <= 599) {
-                                      statusCode = v;
-                                      break;
-                                  }
+                              f.setAccessible(true);
+                              if (f.getType() == int.class && "code".equals(f.getName())) {
+                                  statusCode = f.getInt(res);
+                              } else if ("networkResponse".equals(f.getName())) {
+                                  netRes = f.get(res);
                               }
                           }
-                          if (statusCode >= 400 || chainIndex == 0) {
-                              String resSummary = dumpObjectFields(res);
-                              log(statusCode >= 400 ? "HTTP-ERR-BODY" : "HTTP-RES",
-                                  "HTTP " + statusCode + " (chainIdx=" + chainIndex + ") | req=" + reqSummary + " | res=" + resSummary);
+                          if (statusCode >= 400) {
+                              // Deduplicate so we log the complete network response + body once instead of 20 times
+                              int resKey = System.identityHashCode(netRes != null ? netRes : res);
+                              if (!sLoggedHttpResHashes.add(resKey)) {
+                                  return;
+                              }
+                              String reqSummary = req != null ? dumpObjectFields(req, 1500) : "null";
+                              String resSummary = dumpObjectFields(res, 1500);
+                              String errBodyText = peekResponseBodyString(res);
+                              log("HTTP-ERR-BODY", "HTTP " + statusCode
+                                  + " | errBody=" + errBodyText
+                                  + " | req=" + reqSummary
+                                  + " | res=" + resSummary);
                           }
-                      } else if (err != null && chainIndex <= 1) {
-                          log("HTTP-ERR-BODY", "HTTP Exception (chainIdx=" + chainIndex + "): " + err + " | req=" + reqSummary);
+                      } else if (err != null) {
+                          String reqSummary = req != null ? dumpObjectFields(req, 800) : "null";
+                          log("HTTP-ERR-BODY", "HTTP Exception: " + err + " | req=" + reqSummary);
                       }
                   } catch (Throwable ignored) {
                   } finally {
@@ -725,28 +870,32 @@ jobs:
               protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null || !b.sOptMaster) return;
                   switch (this.f1994a) {
-                      case 0: // 1Shot.apk + v4.2643.1 secondary-DEX tamper reporter:
-                              // o.setFontWeight.serializer(Object[]) -> void
-                              // o.ewG.serializer(...) -> void
+                      case 0: // 1Shot.apk + v4.2643.1 0-arg tamper reporter:
+                              // o.ewG.serializer() -> void
+                              // o.ViewLayerCompanionLayerOutlineProvider1.serializer() -> void
                           if (!b.sOptIntegrityBypass && !b.sOpt1ShotExact) return;
                           String clsName = methodHookParam.method.getDeclaringClass().getName();
                           String mthName = methodHookParam.method.getName();
                           String argsInfo = c.formatValueBrief(methodHookParam.args);
                           methodHookParam.setResult(null);
-                          c.log("DEX-BYPASS", "Blocked Secondary-DEX Tamper Reporter: " + clsName + "." + mthName
+                          c.log("DEX-BYPASS", "Blocked Tamper Reporter: " + clsName + "." + mthName
                               + " args=" + argsInfo + " -> null | caller=" + c.getCallerInfo(8));
                           return;
 
                       case 7: // o.r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs.IconCompatParcelizer() -> void
-                              // If user enabled sOptSkipVerifyCoro, skip it in beforeHookedMethod;
-                              // otherwise let it execute so o.setFontWeight.serializer(Object[]) is reached cleanly
-                              // and catch any Throwable in afterHookedMethod!
                           if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
                               methodHookParam.setResult(null);
                               c.log("BYPASS", "Skipped IconCompatParcelizer() via sOptSkipVerifyCoro | caller=" + c.getCallerInfo(6));
                           } else {
-                              c.log("DEX-GUARD", "Entering IconCompatParcelizer() (letting it initialize & call setFontWeight.serializer) | caller=" + c.getCallerInfo(6));
+                              c.log("DEX-GUARD", "Entering IconCompatParcelizer() | caller=" + c.getCallerInfo(6));
                           }
+                          return;
+
+                      case 8: // o.setFontWeight.serializer(Object[]) -> allow execution so Gender$Companion.$$a initializes!
+                          c.log("DEX-GUARD", "Entering " + methodHookParam.method.getDeclaringClass().getName()
+                              + "." + methodHookParam.method.getName()
+                              + " argsBefore=" + c.formatValueBrief(methodHookParam.args, 400)
+                              + " | caller=" + c.getCallerInfo(8));
                           return;
 
                       case 2: // Location.isMock / isFromMockProvider
@@ -762,18 +911,25 @@ jobs:
                           methodHookParam.setResult(2);
                           return;
 
-                      case 4: // verifyRootIntegrity$1.invokeSuspend
+                      case 4: // verifyRootIntegrity$1.invokeSuspend & verifyHookIntegrity$1.invokeSuspend
+                          String coroName = methodHookParam.method.getDeclaringClass().getSimpleName();
                           String innerWriteDump = "";
                           try {
                               if (methodHookParam.thisObject != null) {
-                                  Field wf = methodHookParam.thisObject.getClass().getDeclaredField("write");
-                                  wf.setAccessible(true);
-                                  Object wObj = wf.get(methodHookParam.thisObject);
-                                  innerWriteDump = " writeObj=" + c.dumpObjectFields(wObj);
+                                  for (Field wf : methodHookParam.thisObject.getClass().getDeclaredFields()) {
+                                      if (!wf.getType().isPrimitive()) {
+                                          wf.setAccessible(true);
+                                          Object wObj = wf.get(methodHookParam.thisObject);
+                                          if (wObj != null) {
+                                              innerWriteDump = " " + wf.getName() + "Obj=" + c.dumpObjectFields(wObj);
+                                              break;
+                                          }
+                                      }
+                                  }
                               }
                           } catch (Throwable ignored) {
                           }
-                          c.log("SUPPORT-TRACE", "Enter verifyRootIntegrity$1.invokeSuspend: this="
+                          c.log("SUPPORT-TRACE", "Enter " + coroName + ".invokeSuspend: this="
                               + c.dumpObjectFields(methodHookParam.thisObject) + innerWriteDump
                               + " | caller=" + c.getCallerInfo(6));
                           if (b.sOptSkipVerifyCoro && b.sOptIntegrityBypass) {
@@ -781,7 +937,7 @@ jobs:
                                   ? methodHookParam.thisObject.getClass().getClassLoader() : null);
                               if (unitInstance != null) {
                                   methodHookParam.setResult(unitInstance);
-                                  c.log("BYPASS", "Short-circuited verifyRootIntegrity$1.invokeSuspend -> kotlin.Unit");
+                                  c.log("BYPASS", "Short-circuited " + coroName + ".invokeSuspend -> kotlin.Unit");
                               }
                           }
                           return;
@@ -790,7 +946,7 @@ jobs:
                       case 9: // BaseDexClassLoader.<init> constructor hook
                           return;
 
-                      case 6: // Obfuscated boolean root-check helpers (o.notifyChildren... / o.setCustomAttributeArray)
+                      case 6: // Obfuscated boolean root-check helpers
                           if (b.sOpt1ShotExact || (!b.sOptRootHide && !b.sOptIntegrityBypass)) return;
                           Class<?> rt = (methodHookParam.method instanceof Method)
                               ? ((Method) methodHookParam.method).getReturnType() : Object.class;
@@ -827,10 +983,28 @@ jobs:
                       } else {
                           c.log("DEX-BYPASS", "IconCompatParcelizer() completed normally!");
                       }
+                  } else if (this.f1994a == 8) {
+                      Throwable t = methodHookParam.getThrowable();
+                      String cn = methodHookParam.method.getDeclaringClass().getName();
+                      String mn = methodHookParam.method.getName();
+                      if (t != null) {
+                          c.log("DEX-BYPASS", "Exception in " + cn + "." + mn + ": "
+                              + t.getClass().getSimpleName() + ": " + t.getMessage()
+                              + " | stack=" + c.formatTopStack(t, 10));
+                          if ((b.sOptIntegrityBypass || b.sOpt1ShotExact)
+                                  && ((Method) methodHookParam.method).getReturnType() == void.class) {
+                              methodHookParam.setResult(null);
+                          }
+                      } else {
+                          c.log("DEX-BYPASS", cn + "." + mn + " completed! argsAfter="
+                              + c.formatValueBrief(methodHookParam.args, 400)
+                              + " -> result=" + c.formatValueBrief(methodHookParam.getResult(), 400));
+                      }
                   } else if (this.f1994a == 4) {
+                      String coroName = methodHookParam.method.getDeclaringClass().getSimpleName();
                       Throwable t = methodHookParam.getThrowable();
                       if (t != null) {
-                          c.log("NPE-TRACE", "Exception in " + methodHookParam.method.getDeclaringClass().getName()
+                          c.log("NPE-TRACE", "Exception in " + coroName
                               + "." + methodHookParam.method.getName() + ": " + t.getClass().getSimpleName()
                               + " (" + t.getMessage() + ")"
                               + " | thisAfter=" + c.dumpObjectFields(methodHookParam.thisObject)
@@ -841,7 +1015,7 @@ jobs:
                               methodHookParam.setResult(unitInstance);
                           }
                       } else {
-                          c.log("BYPASS", "verifyRootIntegrity$1.invokeSuspend completed normally! result="
+                          c.log("BYPASS", coroName + ".invokeSuspend completed normally! result="
                               + String.valueOf(methodHookParam.getResult())
                               + " | thisAfter=" + c.dumpObjectFields(methodHookParam.thisObject));
                       }
@@ -883,7 +1057,8 @@ jobs:
           import java.io.InputStreamReader;
           import java.io.OutputStream;
           import java.nio.charset.StandardCharsets;
-          import java.security.ProviderException;
+          import java.security.cert.Certificate;
+          import java.security.cert.X509Certificate;
           import java.util.Arrays;
           import java.util.HashMap;
           import java.util.HashSet;
@@ -929,6 +1104,8 @@ jobs:
               private static volatile String sCachedSanitizedFdList = null;
               private static volatile String sCachedSanitizedPsList = null;
               private static volatile String sCachedSanitizedGetprop = null;
+              private static volatile File sSanitizedMapsFile = null;
+              private static volatile File sSanitizedMountsFile = null;
 
               private static final ThreadLocal<Boolean> sInInternalExec = new ThreadLocal<Boolean>() {
                   @Override
@@ -1060,6 +1237,69 @@ jobs:
                       || l.contains("/su") || l.contains(" su ") || l.endsWith(" su");
               }
 
+              private static File getSanitizedProcFile(String realPath) {
+                  if (realPath == null) return null;
+                  String p = realPath.trim();
+                  boolean isMaps = p.equals("/proc/self/maps") || p.equals("/proc/self/smaps")
+                      || (p.startsWith("/proc/") && (p.endsWith("/maps") || p.endsWith("/smaps")));
+                  boolean isMounts = p.equals("/proc/self/mounts") || p.equals("/proc/self/mountinfo")
+                      || (p.startsWith("/proc/") && (p.endsWith("/mounts") || p.endsWith("/mountinfo")));
+                  if (!isMaps && !isMounts) return null;
+
+                  sInInternalExec.set(Boolean.TRUE);
+                  try {
+                      File baseDir = sDataDir != null ? new File(sDataDir, "cache") : new File("/data/local/tmp");
+                      if (!baseDir.exists()) baseDir.mkdirs();
+                      if (isMaps) {
+                          if (sSanitizedMapsFile != null && sSanitizedMapsFile.exists() && sSanitizedMapsFile.length() > 100) {
+                              return sSanitizedMapsFile;
+                          }
+                          File out = new File(baseDir, ".sys_m_" + android.os.Process.myPid());
+                          StringBuilder sb = new StringBuilder();
+                          try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream("/proc/self/maps"), StandardCharsets.UTF_8))) {
+                              String line;
+                              while ((line = br.readLine()) != null) {
+                                  if (!isSuspiciousLine(line)) {
+                                      sb.append(line).append("\n");
+                                  }
+                              }
+                          }
+                          try (FileOutputStream fos = new FileOutputStream(out, false)) {
+                              fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                          }
+                          sSanitizedMapsFile = out;
+                          return out;
+                      } else {
+                          if (sSanitizedMountsFile != null && sSanitizedMountsFile.exists() && sSanitizedMountsFile.length() > 50) {
+                              return sSanitizedMountsFile;
+                          }
+                          File out = new File(baseDir, ".sys_mt_" + android.os.Process.myPid());
+                          StringBuilder sb = new StringBuilder();
+                          try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(p), StandardCharsets.UTF_8))) {
+                              String line;
+                              while ((line = br.readLine()) != null) {
+                                  if (isSuspiciousLine(line) || line.contains("overlay") || line.contains("/debug_ramdisk")) {
+                                      continue;
+                                  }
+                                  if (line.contains(" /system ") || line.contains(" /vendor ") || line.contains(" /product ") || line.contains(" / ")) {
+                                      line = line.replace("rw,", "ro,");
+                                  }
+                                  sb.append(line).append("\n");
+                              }
+                          }
+                          try (FileOutputStream fos = new FileOutputStream(out, false)) {
+                              fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                          }
+                          sSanitizedMountsFile = out;
+                          return out;
+                      }
+                  } catch (Throwable ignored) {
+                      return null;
+                  } finally {
+                      sInInternalExec.set(Boolean.FALSE);
+                  }
+              }
+
               private static String runRealCommandAndSanitize(String[] realCmd, String mode) {
                   sInInternalExec.set(Boolean.TRUE);
                   try {
@@ -1106,7 +1346,32 @@ jobs:
                   }
               }
 
-              private static FakeProcess createFakeProcessForCommand(String rawCmdStr, Map<String, String> envMap) {
+              private static Process spawnRealProcessWithOutput(String text, int exitCode, String tagSuffix) {
+                  sInInternalExec.set(Boolean.TRUE);
+                  try {
+                      if (exitCode != 0) {
+                          return Runtime.getRuntime().exec(new String[]{"/system/bin/false"});
+                      }
+                      if ("1\n".equals(text)) {
+                          return Runtime.getRuntime().exec(new String[]{"/system/bin/echo", "1"});
+                      }
+                      File baseDir = sDataDir != null ? new File(sDataDir, "cache") : new File("/data/local/tmp");
+                      if (!baseDir.exists()) baseDir.mkdirs();
+                      File outFile = new File(baseDir, ".hs_out_" + tagSuffix);
+                      if (!outFile.exists() || outFile.length() == 0) {
+                          try (FileOutputStream fos = new FileOutputStream(outFile, false)) {
+                              fos.write((text != null ? text : "").getBytes(StandardCharsets.UTF_8));
+                          }
+                      }
+                      return Runtime.getRuntime().exec(new String[]{"/system/bin/cat", outFile.getAbsolutePath()});
+                  } catch (Throwable ignored) {
+                      return new FakeProcess(text, exitCode);
+                  } finally {
+                      sInInternalExec.set(Boolean.FALSE);
+                  }
+              }
+
+              private static Process createSanitizedProcessForCommand(String rawCmdStr, Map<String, String> envMap) {
                   if (rawCmdStr == null) return null;
                   String cmdStr = expandEnvVars(rawCmdStr, envMap);
                   if (cmdStr.contains("log.tag.BRAZE") || cmdStr.contains("log.tag.APPBOY")) {
@@ -1114,19 +1379,19 @@ jobs:
                   }
                   String lower = cmdStr.toLowerCase(Locale.US);
 
-                  // 1. which su / busybox / magisk -> exitCode 1 (not found), empty output
+                  // 1. which su / busybox / magisk -> real /system/bin/false (exitCode 1, genuine UNIXProcess!)
                   if (lower.contains("which") || lower.endsWith(" su") || lower.contains(", su]")
                           || lower.contains("/su") || lower.contains("magisk")
                           || lower.contains("busybox") || lower.contains("kernelsu") || lower.contains("apatch")) {
-                      return new FakeProcess("", 1);
+                      return spawnRealProcessWithOutput("", 1, "false");
                   }
 
                   // 2. getprop ro.secure or base64 encoded "getprop ro.secure" (Z2V0cHJvcCByby5zZWN1cmUK)
                   if (lower.contains("ro.secure") || cmdStr.contains("Z2V0cHJvcC")) {
-                      return new FakeProcess("1\n", 0);
+                      return spawnRealProcessWithOutput("1\n", 0, "ro_secure");
                   }
 
-                  // 3. full getprop dump (cached & sanitized from real device properties so grep/o3.s sees 1500+ authentic lines!)
+                  // 3. full getprop dump
                   if (lower.contains("getprop")) {
                       if (sCachedSanitizedGetprop == null || sCachedSanitizedGetprop.isEmpty()) {
                           String realOut = runRealCommandAndSanitize(new String[]{"/system/bin/getprop"}, "getprop");
@@ -1149,10 +1414,10 @@ jobs:
                           }
                           sCachedSanitizedGetprop = realOut;
                       }
-                      return new FakeProcess(sCachedSanitizedGetprop, 0);
+                      return spawnRealProcessWithOutput(sCachedSanitizedGetprop, 0, "getprop");
                   }
 
-                  // 4. mount or base64 encoded "mount" (bW91bnQK) — cached & sanitized from real mount output so ByN.s:71 and ByN.s:77 match 100%!
+                  // 4. mount or base64 encoded "mount" (bW91bnQK)
                   if (lower.contains("mount") || cmdStr.contains("bW91bnQK")) {
                       if (sCachedSanitizedMounts == null || sCachedSanitizedMounts.isEmpty()) {
                           String realMounts = runRealCommandAndSanitize(new String[]{"/system/bin/mount"}, "mount");
@@ -1165,10 +1430,10 @@ jobs:
                           }
                           sCachedSanitizedMounts = realMounts;
                       }
-                      return new FakeProcess(sCachedSanitizedMounts, 0);
+                      return spawnRealProcessWithOutput(sCachedSanitizedMounts, 0, "mount");
                   }
 
-                  // 5. ls -l /proc/<pid>/fd — cached & sanitized real fd list so ByN.s:71, ByN.s:77, and ZyB.s:66 see 50+ authentic FDs!
+                  // 5. ls -l /proc/<pid>/fd
                   if (lower.contains("/proc/") && lower.contains("/fd")) {
                       if (sCachedSanitizedFdList == null || sCachedSanitizedFdList.isEmpty()) {
                           int pid = android.os.Process.myPid();
@@ -1181,10 +1446,10 @@ jobs:
                           }
                           sCachedSanitizedFdList = realFds;
                       }
-                      return new FakeProcess(sCachedSanitizedFdList, 0);
+                      return spawnRealProcessWithOutput(sCachedSanitizedFdList, 0, "fd");
                   }
 
-                  // 6. ps -T -p <pid> — cached & sanitized real thread list so LjU.s:66 sees authentic ps output!
+                  // 6. ps -T -p <pid>
                   if (lower.contains("ps ") || lower.contains("[ps,")) {
                       if (sCachedSanitizedPsList == null || sCachedSanitizedPsList.isEmpty()) {
                           int pid = android.os.Process.myPid();
@@ -1195,7 +1460,7 @@ jobs:
                           }
                           sCachedSanitizedPsList = realPs;
                       }
-                      return new FakeProcess(sCachedSanitizedPsList, 0);
+                      return spawnRealProcessWithOutput(sCachedSanitizedPsList, 0, "ps");
                   }
 
                   return null;
@@ -1218,7 +1483,7 @@ jobs:
                       props.setProperty("opt_1shot_exact", String.valueOf(sOpt1ShotExact));
                       props.setProperty("opt_skip_verify_coro", String.valueOf(sOptSkipVerifyCoro));
                       try (FileOutputStream fos = new FileOutputStream(propFile)) {
-                          props.store(fos, "HS Rider Profile v3.5");
+                          props.store(fos, "HS Rider Profile v3.6");
                       }
                   } catch (Throwable ignored) {
                   }
@@ -1277,7 +1542,7 @@ jobs:
                               saveProfileToLocalProp(sDataDir);
                               syncProfileToAppSharedPrefs(ctx);
                               applyBuildSpoof(cl);
-                              c.log("PREFS", "Synced settings & profile from HS Panel v3.5: " + sBrand + " / " + sModel
+                              c.log("PREFS", "Synced settings & profile from HS Panel v3.6: " + sBrand + " / " + sModel
                                   + " (1ShotExact=" + sOpt1ShotExact + ", SkipCoro=" + sOptSkipVerifyCoro + ")");
                           }
                       }
@@ -1542,7 +1807,7 @@ jobs:
                               }
                           }
                           return;
-                      case 8: // Runtime.exec(cmd, envp, dir)
+                      case 8: // Runtime.exec(String[] cmdarray, String[] envp, File dir)
                           if (sOpt1ShotExact || !sOptRootHide || sInInternalExec.get()) return;
                           if (methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
                               String cmdStr;
@@ -1563,12 +1828,12 @@ jobs:
                                       }
                                   }
                               }
-                              FakeProcess fp = createFakeProcessForCommand(cmdStr, envMap);
-                              if (fp != null) {
-                                  c.log("EXEC-FAKE", "Returned sanitized FakeProcess(exit=" + fp.exitValue()
+                              Process proc = createSanitizedProcessForCommand(cmdStr, envMap);
+                              if (proc != null) {
+                                  c.log("EXEC-FAKE", "Returned sanitized Process(" + proc.getClass().getSimpleName()
                                       + ") for Runtime.exec(" + cmdStr + ")" + envLog
                                       + " | caller=" + c.getCallerInfo());
-                                  methodHookParam.setResult(fp);
+                                  methodHookParam.setResult(proc);
                               } else {
                                   c.log("EXEC-PASS", "Passed through Runtime.exec(" + cmdStr + ")" + envLog
                                       + " | caller=" + c.getCallerInfo());
@@ -1583,9 +1848,11 @@ jobs:
                               if (stack != null) {
                                   for (StackTraceElement el : stack) {
                                       String cn = el.getClassName();
-                                      if (cn.contains("verifyRootIntegrity") || cn.contains("RiderSupportFeaturesImpl")
+                                      if (cn.contains("verifyRootIntegrity") || cn.contains("verifyHookIntegrity")
+                                              || cn.contains("RiderSupportFeaturesImpl")
                                               || cn.contains("setFontWeight") || cn.contains("setLocaleList")
                                               || cn.contains("ewG")
+                                              || cn.contains("ViewLayerCompanionLayerOutlineProvider1")
                                               || cn.contains("r8lambdaH04qYyeOzRXd4CFrSTNkPB99_Ds")
                                               || cn.contains("r8lambdaFEnLU5alJx2ClfZRg4tE2QEPKfs")) {
                                           isIntegrityCrash = true;
@@ -1617,31 +1884,44 @@ jobs:
                                   envMap = pb.environment();
                               } catch (Throwable ignored) {
                               }
-                              FakeProcess fp = createFakeProcessForCommand(cmdStr, envMap);
-                              if (fp != null) {
-                                  c.log("EXEC-FAKE", "Returned sanitized FakeProcess(exit=" + fp.exitValue()
+                              Process proc = createSanitizedProcessForCommand(cmdStr, envMap);
+                              if (proc != null) {
+                                  c.log("EXEC-FAKE", "Returned sanitized Process(" + proc.getClass().getSimpleName()
                                       + ") for ProcessBuilder.start(" + cmdStr + ") | caller=" + c.getCallerInfo());
-                                  methodHookParam.setResult(fp);
+                                  methodHookParam.setResult(proc);
                               }
                           }
                           return;
-                      case 14: // KeyStore.getCertificateChain - Block Incognia Hardware Key Attestation (which leaks unlocked bootloader & real Motorola model!)
-                          String alias = (methodHookParam.args != null && methodHookParam.args.length > 0) ? String.valueOf(methodHookParam.args[0]) : "?";
-                          String callerStack = c.getCallerInfo(10);
+                      case 15: // KeyGenParameterSpec$Builder.setAttestationChallenge(byte[])
+                               // CRITICAL FIX: Never throw ProviderException from setAttestationChallenge()!
+                               // Throwing inside our hook embedded XposedBridge frames into Throwable.getStackTrace()!
+                               // Instead, pass null as the challenge so Android KeyStore generates a genuine hardware keypair
+                               // WITHOUT the attestation extension (1.3.6.1.4.1.11129.2.1.17)!
                           if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass)
-                                  && (alias.startsWith("icg-") || callerStack.contains("com.incognia"))) {
-                              c.log("KEYSTORE", "Blocked Hardware Key Attestation getCertificateChain(alias=" + alias
-                                  + ") -> null (prevents unlocked bootloader & real model leak!) | stack=" + callerStack);
-                              methodHookParam.setResult(null);
-                          } else {
-                              c.log("KEYSTORE", "KeyStore.getCertificateChain(alias=" + alias + ") called! | stack=" + callerStack);
+                                  && methodHookParam.args != null && methodHookParam.args.length > 0
+                                  && methodHookParam.args[0] != null) {
+                              String attCaller = c.getCallerInfo(10);
+                              methodHookParam.args[0] = null;
+                              c.log("KEYSTORE", "Stripped setAttestationChallenge(byte[]) -> null (clean non-attested key generation without exception!) | stack=" + attCaller);
                           }
                           return;
-                      case 15: // KeyGenParameterSpec$Builder.setAttestationChallenge(byte[])
-                          String attCaller = c.getCallerInfo(10);
-                          if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass) && attCaller.contains("com.incognia")) {
-                              c.log("KEYSTORE", "Blocked setAttestationChallenge() for Incognia -> throwing ProviderException | stack=" + attCaller);
-                              methodHookParam.setThrowable(new ProviderException("Key attestation not supported"));
+                      case 16: // FileInputStream(File) / FileInputStream(String) -> redirect /proc/self/maps & mounts to sanitized copy
+                          if (sOpt1ShotExact || !sOptRootHide || sInInternalExec.get()) return;
+                          if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] != null) {
+                              String path = null;
+                              boolean isFileArg = methodHookParam.args[0] instanceof File;
+                              if (isFileArg) {
+                                  path = ((File) methodHookParam.args[0]).getPath();
+                              } else if (methodHookParam.args[0] instanceof String) {
+                                  path = (String) methodHookParam.args[0];
+                              }
+                              if (path != null && path.startsWith("/proc/")) {
+                                  File cleanFile = getSanitizedProcFile(path);
+                                  if (cleanFile != null) {
+                                      methodHookParam.args[0] = isFileArg ? cleanFile : cleanFile.getAbsolutePath();
+                                      c.log("ROOT-CHECK", "Redirected FileInputStream(" + path + ") -> sanitized proc file | caller=" + c.getCallerInfo(6));
+                                  }
+                              }
                           }
                           return;
                       default:
@@ -1652,7 +1932,7 @@ jobs:
               @Override
               protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                   if (methodHookParam == null) return;
-                  if (this.f1995a == 1) { // Re-apply Build spoof in Application.onCreate afterHookedMethod (exact 1Shot timing)
+                  if (this.f1995a == 1) {
                       ClassLoader cl = (ClassLoader) this.f1996b;
                       applyBuildSpoof(cl);
                       c.onNewDexClassLoaderCreated(cl);
@@ -1674,7 +1954,7 @@ jobs:
                       if (methodHookParam.args != null && methodHookParam.args.length > 0 && methodHookParam.args[0] instanceof String) {
                           String arg0 = (String) methodHookParam.args[0];
                           if (c.isInterestingErrorString(arg0)) {
-                              c.log("IAL403-DETECT", "JSON payload detected: " + c.formatValueBrief(arg0)
+                              c.log("IAL403-DETECT", "JSON payload detected: " + c.formatValueBrief(arg0, 800)
                                   + " | stack=" + c.getCallerInfo(15));
                           }
                       }
@@ -1682,6 +1962,29 @@ jobs:
                       if (res instanceof String && c.isInterestingErrorString((String) res)) {
                           c.log("IAL403-DETECT", "JSON field read (" + (methodHookParam.args != null && methodHookParam.args.length > 0 ? methodHookParam.args[0] : "?")
                               + ") -> \"" + res + "\" | stack=" + c.getCallerInfo(15));
+                      }
+                  } else if (this.f1995a == 14) { // KeyStore.getCertificateChain(String alias)
+                      String alias = (methodHookParam.args != null && methodHookParam.args.length > 0) ? String.valueOf(methodHookParam.args[0]) : "?";
+                      Object res = methodHookParam.getResult();
+                      if (!sOpt1ShotExact && (sOptRootHide || sOptIntegrityBypass) && res instanceof Certificate[]) {
+                          Certificate[] chain = (Certificate[]) res;
+                          boolean hasAttestationExt = false;
+                          for (Certificate cert : chain) {
+                              if (cert instanceof X509Certificate) {
+                                  byte[] ext = ((X509Certificate) cert).getExtensionValue("1.3.6.1.4.1.11129.2.1.17");
+                                  if (ext != null && ext.length > 0) {
+                                      hasAttestationExt = true;
+                                      break;
+                                  }
+                              }
+                          }
+                          if (hasAttestationExt) {
+                              // Old cached hardware-attested key in keystore: return null so caller regenerates key with challenge=null
+                              methodHookParam.setResult(null);
+                              c.log("KEYSTORE", "Hid cached attested CertificateChain(alias=" + alias + ", len=" + chain.length + ") -> null so clean key is generated");
+                          } else {
+                              c.log("KEYSTORE", "Passed clean non-attested CertificateChain(alias=" + alias + ", len=" + chain.length + ")");
+                          }
                       }
                   }
               }
@@ -1710,6 +2013,7 @@ jobs:
           import i2.b;
           import i2.c;
           import java.io.File;
+          import java.io.FileInputStream;
           import java.lang.reflect.Method;
           import java.security.KeyStore;
           import java.util.Arrays;
@@ -1760,7 +2064,7 @@ jobs:
                   final ClassLoader cl = lpparam.classLoader;
                   final String dataDir = lpparam.appInfo != null ? lpparam.appInfo.dataDir : null;
 
-                  c.log("INIT", "Loaded v3.5 (IAL403 Deep Fix + Real Sanitized Exec + KeyStore & OkHttp Hook) into package=" + lpparam.packageName
+                  c.log("INIT", "Loaded v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation & Real Exec) into package=" + lpparam.packageName
                       + " process=" + lpparam.processName
                       + " SDK=" + Build.VERSION.SDK_INT
                       + " release=" + Build.VERSION.RELEASE
@@ -1789,7 +2093,7 @@ jobs:
                       c.logError("BaseDexHook", t);
                   }
 
-                  // 2. Inspect main ClassLoader for secondary DEX targets, Obfuscated OkHttp3, Compose, Integrity classes, Incognia
+                  // 2. Inspect main ClassLoader for secondary DEX targets, ViewLayer tamper class, Obfuscated OkHttp3, Compose, Integrity classes, Incognia
                   c.onNewDexClassLoaderCreated(cl);
 
                   // 3. Hook HungerStation v4.2643.1+ obfuscated boolean root-check methods
@@ -1797,13 +2101,14 @@ jobs:
                   inspectAndHookClass(cl, "o.setCustomAttributeArray", "serializer", 6, false);
                   inspectAndHookClass(cl, "o.setCustomAttributeArray", "write", 6, false);
 
-                  // 4. Hook verifyRootIntegrity$1.invokeSuspend
+                  // 4. Hook BOTH verifyRootIntegrity$1.invokeSuspend AND verifyHookIntegrity$1.invokeSuspend!
                   inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyRootIntegrity$1", "invokeSuspend", 4, true);
+                  inspectAndHookClass(cl, "com.roadrunner.rider.support.implementation.RiderSupportFeaturesImpl$verifyHookIntegrity$1", "invokeSuspend", 4, true);
 
                   // 5. Trace o.x5.serializer return values (type 5)
                   inspectAndHookClass(cl, "o.x5", "serializer", 5, false);
 
-                  // 6. Hook JSONObject & KeyStore / KeyGenParameterSpec (to block Incognia Hardware Key Attestation!)
+                  // 6. Hook JSONObject & KeyStore / KeyGenParameterSpec (clean non-throwing Attestation strip!)
                   try {
                       XposedHelpers.findAndHookConstructor(JSONObject.class, String.class, new b(13, null));
                       XposedHelpers.findAndHookMethod(JSONObject.class, "getString", String.class, new b(13, null));
@@ -1811,7 +2116,7 @@ jobs:
                       XposedHelpers.findAndHookMethod(JSONObject.class, "optString", String.class, String.class, new b(13, null));
                       XposedHelpers.findAndHookMethod(KeyStore.class, "getCertificateChain", String.class, new b(14, null));
                       XposedHelpers.findAndHookMethod(KeyGenParameterSpec.Builder.class, "setAttestationChallenge", byte[].class, new b(15, null));
-                      c.log("HOOK-OK", "Hooked JSONObject, KeyStore & KeyGenParameterSpec for Attestation protection");
+                      c.log("HOOK-OK", "Hooked JSONObject, KeyStore & KeyGenParameterSpec for clean Attestation strip");
                   } catch (Throwable t) {
                       c.logError("JsonKeyStoreHook", t);
                   }
@@ -1880,8 +2185,11 @@ jobs:
 
                   try {
                       XposedHelpers.findAndHookMethod(File.class, "exists", new b(5, null));
-                      XposedBridge.hookAllMethods(Runtime.class, "exec", new b(8, null));
+                      // Hook only Runtime.exec(String[], String[], File) so overloaded exec() calls don't double-trigger
+                      XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class, String[].class, File.class, new b(8, null));
                       XposedHelpers.findAndHookMethod(ProcessBuilder.class, "start", new b(11, null));
+                      XposedHelpers.findAndHookConstructor(FileInputStream.class, File.class, new b(16, null));
+                      XposedHelpers.findAndHookConstructor(FileInputStream.class, String.class, new b(16, null));
                   } catch (Throwable t) {
                       c.logError("FileExecHook", t);
                   }
@@ -1934,7 +2242,7 @@ jobs:
                   try {
                       if ("log".equals(method) && arg != null) {
                           synchronized (LogProvider.class) {
-                              if (f.exists() && f.length() > 512 * 1024) {
+                              if (f.exists() && f.length() > 2 * 1024 * 1024) {
                                   f.delete();
                               }
                               try (FileOutputStream fos = new FileOutputStream(f, true)) {
@@ -2005,7 +2313,7 @@ jobs:
                       return combined.toString();
                   }
                   return "No logs received yet." + NL
-                      + "1. Enable HS Panel v3.5 in LSPosed for HungerStation." + NL
+                      + "1. Enable HS Panel v3.6 in LSPosed for HungerStation." + NL
                       + "2. Open HungerStation Rider, then return here to the [2. Error Logs] tab and tap Refresh.";
               }
 
@@ -2294,7 +2602,7 @@ jobs:
               <TextView
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="HS Panel v3.5 - Control &amp; Logs"
+                  android:text="HS Panel v3.6 - Control &amp; Logs"
                   android:textColor="#FFFFFF"
                   android:textSize="20sp"
                   android:textStyle="bold"
@@ -2438,7 +2746,7 @@ jobs:
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
                               android:textColor="#FFFFFF"
-                              android:text="Sanitize Real Shell Output for Root/Incognia (تنظيف مخرجات أوامر النظام الحقيقية)"
+                              android:text="Sanitize Real Shell Output &amp; /proc/self/maps (تنظيف مخرجات النظام وملفات الذاكرة)"
                               android:checked="true" />
 
                           <CheckBox
@@ -2552,7 +2860,7 @@ jobs:
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="app_name">HS Panel v3.5</string>
+              <string name="app_name">HS Panel v3.6</string>
           </resources>
           EOF
 
@@ -2603,7 +2911,7 @@ jobs:
                       android:value="93" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="HS Panel v3.5 (IAL403 Deep Fix + Real Sanitized Exec + KeyStore &amp; OkHttp Hook)" />
+                      android:value="HS Panel v3.6 (IAL403 Fix + SetFontWeight Init + ViewLayer Tamper Hook + Clean Attestation &amp; Real Exec)" />
                   <meta-data
                       android:name="xposedscope"
                       android:value="com.logistics.rider.hungerstation" />
@@ -2676,8 +2984,8 @@ jobs:
                   applicationId "com.logistics.rider.lsposed"
                   minSdk 30
                   targetSdk 34
-                  versionCode 11
-                  versionName "3.5"
+                  versionCode 12
+                  versionName "3.6"
               }
 
               signingConfigs {
@@ -2715,12 +3023,12 @@ jobs:
         run: |
           gradle assembleRelease --stacktrace
           mkdir -p output
-          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v3.5.apk
+          cp app/build/outputs/apk/release/app-release.apk output/HS-Panel-v3.6.apk
           ls -lh output/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HS-Panel-v3.5-APK
-          path: output/HS-Panel-v3.5.apk
+          name: HS-Panel-v3.6-APK
+          path: output/HS-Panel-v3.6.apk
           if-no-files-found: error
