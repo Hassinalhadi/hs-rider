@@ -256,6 +256,7 @@ jobs:
                   sAppClassLoader = cl;
 
                   String[] chainCandidates = {
+                      "o.addDismissRunnable",
                       "o.insertOrIgnoreItem",
                       "okhttp3.internal.http.RealInterceptorChain"
                   };
@@ -333,7 +334,7 @@ jobs:
                   }
               }
 
-              private static synchronized void hookChainClassDynamically(Class<?> chainCls, Class<?> responseCls) {
+              public static synchronized void hookChainClassDynamically(Class<?> chainCls, Class<?> responseCls) {
                   if (chainCls == null || responseCls == null) return;
                   try {
                       String key = System.identityHashCode(chainCls) + "#" + chainCls.getName();
@@ -590,7 +591,7 @@ jobs:
                                               && m.getReturnType() != void.class
                                               && !m.getReturnType().isPrimitive()
                                               && ((reqCls != null && m.getParameterTypes()[0] == reqCls)
-                                                  || "o.getDetails".equals(m.getParameterTypes()[0].getName()))) {
+                                                  || "o.BrazeInAppMessageManagerExternalSyntheticLambda45".equals(m.getParameterTypes()[0].getName()) || "o.getDetails".equals(m.getParameterTypes()[0].getName()))) {
                                           sLastOkHttpClient = clientCandidate;
                                           c.log("OKHTTP-HOOK", "Captured live HungerStation OkHttpClient (" + clientCandidate.getClass().getName() + ")");
                                           return;
@@ -1192,11 +1193,13 @@ jobs:
                               while (entries != null && entries.hasMoreElements()) {
                                   String cn = entries.nextElement();
                                   totalClasses++;
+                                  if (cn.startsWith("com.incognia.internal.") || cn.startsWith("com.google.android.gms.")) {
+                                      continue;
+                                  }
                                   String lower = cn.toLowerCase(Locale.US);
                                   boolean nameMatch = lower.contains("integrity") || lower.contains("tamper")
                                       || lower.contains("incognia") || lower.contains("roothide")
                                       || lower.contains("verifyroot") || lower.contains("verifyhook")
-                                      || lower.contains("okhttp") || lower.contains("interceptor")
                                       || lower.contains("ial403") || lower.contains("ridersupport");
                                   if (nameMatch) {
                                       matchedClasses++;
@@ -1229,9 +1232,21 @@ jobs:
                                                           && !m.getReturnType().isPrimitive()
                                                           && m.getReturnType() != String.class
                                                           && m.getReturnType() != Object.class) {
-                                                      matchedClasses++;
-                                                      log("DEX-SCAN", "OkHttp Chain candidate: " + cn + "." + m.getName()
-                                                          + "(" + m.getParameterTypes()[0].getName() + ")->" + m.getReturnType().getName());
+                                                      Class<?> pCls = m.getParameterTypes()[0];
+                                                      Class<?> rCls = m.getReturnType();
+                                                      boolean pLooksReq = false, rLooksRes = false;
+                                                      for (Field pf : pCls.getDeclaredFields()) {
+                                                          if ("headers".equals(pf.getName()) || "url".equals(pf.getName())) { pLooksReq = true; break; }
+                                                      }
+                                                      for (Field rf : rCls.getDeclaredFields()) {
+                                                          if ("code".equals(rf.getName()) || "sentRequestAtMillis".equals(rf.getName())) { rLooksRes = true; break; }
+                                                      }
+                                                      if (pLooksReq && rLooksRes) {
+                                                          matchedClasses++;
+                                                          log("DEX-SCAN", "Confirmed OkHttp RealInterceptorChain: " + cn + "." + m.getName()
+                                                              + "(" + pCls.getName() + ")->" + rCls.getName());
+                                                          d.hookChainClassDynamically(cand, rCls);
+                                                      }
                                                       break;
                                                   }
                                               }
