@@ -916,17 +916,25 @@ jobs:
           import java.text.SimpleDateFormat;
           import java.util.ArrayList;
           import java.util.Arrays;
+          import dalvik.system.BaseDexClassLoader;
+          import dalvik.system.DexFile;
           import java.util.Date;
+          import java.util.Enumeration;
           import java.util.List;
           import java.util.Locale;
           import java.util.Set;
           import java.util.concurrent.ConcurrentHashMap;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
 
           public final class c {
               private static final List<String> sBuffer = new ArrayList<>();
               private static final List<String> sPendingProviderLines = new ArrayList<>();
               private static final ConcurrentHashMap<String, Integer> sEventCounts = new ConcurrentHashMap<>();
               private static final Set<String> sHookedClasses = ConcurrentHashMap.newKeySet();
+              private static final Set<String> sScannedLoaders = ConcurrentHashMap.newKeySet();
+              private static final Set<String> sMissedClasses = ConcurrentHashMap.newKeySet();
+              private static final ExecutorService sDexScanExecutor = Executors.newSingleThreadExecutor();
               private static volatile Context sTargetContext;
               public static final Uri LOG_PROVIDER_URI = Uri.parse("content://com.logistics.rider.lsposed.logprovider");
               private static final String NL = String.valueOf((char) 10);
@@ -963,7 +971,7 @@ jobs:
                       || "DEX-BYPASS".equals(tag) || "ACTIVITY".equals(tag) || "SPOOF".equals(tag)
                       || "CLEANUP".equals(tag) || "IAL403".equals(tag) || "IAL403-DETECT".equals(tag)
                       || "HTTP-ERR-BODY".equals(tag) || "OKHTTP-HOOK".equals(tag) || "OKHTTP-FIX".equals(tag)
-                      || "OKHTTP-ACCEPT".equals(tag) || "OKHTTP-ORDER".equals(tag) || "HOOK-OK".equals(tag);
+                      || "OKHTTP-ACCEPT".equals(tag) || "OKHTTP-ORDER".equals(tag) || "HOOK-OK".equals(tag) || "DEX-SCAN".equals(tag) || "HOOK-MISS".equals(tag);
                   if (count > 8 && !isUnlimited) {
                       return;
                   }
@@ -1101,6 +1109,9 @@ jobs:
                   // A3. Hook HungerStation's internal OkHttp Engine (deduplicated by Class identity)
                   d.hookOkHttpInClassLoader(cl);
 
+                  // A4. Async DEX class & signature scanner for diagnostics
+                  scanDexClassesAsync(cl);
+
                   if (b.sOpt1ShotExact) {
                       return;
                   }
@@ -1117,7 +1128,12 @@ jobs:
               public static synchronized void hookTargetMethodInClass(ClassLoader cl, String cn, String methodName, int hookMode) {
                   try {
                       Class<?> cls = XposedHelpers.findClassIfExists(cn, cl);
-                      if (cls == null) return;
+                      if (cls == null) {
+                          if (sMissedClasses.add(cn)) {
+                              log("HOOK-MISS", "Class not found in ClassLoader: " + cn);
+                          }
+                          return;
+                      }
                       String key = System.identityHashCode(cls) + "#" + cn + "#" + (methodName != null ? methodName : "*") + "#" + hookMode;
                       if (sHookedClasses.contains(key)) return;
                       sHookedClasses.add(key);
@@ -1146,6 +1162,91 @@ jobs:
                   } catch (Throwable t) {
                       logError("HookDex_" + cn, t);
                   }
+              }
+
+              public static void scanDexClassesAsync(final ClassLoader cl) {
+                  if (!(cl instanceof BaseDexClassLoader)) return;
+                  final String loaderKey = System.identityHashCode(cl) + "#" + cl.getClass().getName();
+                  if (!sScannedLoaders.add(loaderKey)) return;
+                  sDexScanExecutor.execute(() -> {
+                      try {
+                          Field pathListField = BaseDexClassLoader.class.getDeclaredField("pathList");
+                          pathListField.setAccessible(true);
+                          Object pathList = pathListField.get(cl);
+                          if (pathList == null) return;
+                          Field dexElementsField = pathList.getClass().getDeclaredField("dexElements");
+                          dexElementsField.setAccessible(true);
+                          Object[] elements = (Object[]) dexElementsField.get(pathList);
+                          if (elements == null) return;
+
+                          int totalClasses = 0;
+                          int matchedClasses = 0;
+                          for (Object el : elements) {
+                              if (el == null) continue;
+                              Field dexFileField = el.getClass().getDeclaredField("dexFile");
+                              dexFileField.setAccessible(true);
+                              Object dfObj = dexFileField.get(el);
+                              if (!(dfObj instanceof DexFile)) continue;
+                              DexFile df = (DexFile) dfObj;
+                              Enumeration<String> entries = df.entries();
+                              while (entries != null && entries.hasMoreElements()) {
+                                  String cn = entries.nextElement();
+                                  totalClasses++;
+                                  String lower = cn.toLowerCase(Locale.US);
+                                  boolean nameMatch = lower.contains("integrity") || lower.contains("tamper")
+                                      || lower.contains("incognia") || lower.contains("roothide")
+                                      || lower.contains("verifyroot") || lower.contains("verifyhook")
+                                      || lower.contains("okhttp") || lower.contains("interceptor")
+                                      || lower.contains("ial403") || lower.contains("ridersupport");
+                                  if (nameMatch) {
+                                      matchedClasses++;
+                                      log("DEX-SCAN", "Matched class: " + cn);
+                                      continue;
+                                  }
+                                  if (cn.startsWith("o.")) {
+                                      try {
+                                          Class<?> cand = Class.forName(cn, false, cl);
+                                          Field[] fields = cand.getDeclaredFields();
+                                          boolean hasUrl = false, hasMethod = false, hasHeaders = false, hasCode = false, hasSentAt = false, hasList = false;
+                                          for (Field f : fields) {
+                                              String fn = f.getName();
+                                              if ("url".equals(fn)) hasUrl = true;
+                                              else if ("method".equals(fn)) hasMethod = true;
+                                              else if ("headers".equals(fn)) hasHeaders = true;
+                                              else if ("code".equals(fn)) hasCode = true;
+                                              else if ("sentRequestAtMillis".equals(fn)) hasSentAt = true;
+                                              if (List.class.isAssignableFrom(f.getType())) hasList = true;
+                                          }
+                                          if ((hasUrl && hasMethod && hasHeaders) || (hasCode && hasHeaders && hasSentAt)) {
+                                              matchedClasses++;
+                                              log("DEX-SCAN", "OkHttp Request/Response candidate: " + cn);
+                                          } else if (hasList && fields.length >= 4 && fields.length <= 15) {
+                                              for (Method m : cand.getDeclaredMethods()) {
+                                                  if (m.getParameterTypes().length == 1
+                                                          && !m.getParameterTypes()[0].isPrimitive()
+                                                          && m.getParameterTypes()[0] != String.class
+                                                          && m.getReturnType() != void.class
+                                                          && !m.getReturnType().isPrimitive()
+                                                          && m.getReturnType() != String.class
+                                                          && m.getReturnType() != Object.class) {
+                                                      matchedClasses++;
+                                                      log("DEX-SCAN", "OkHttp Chain candidate: " + cn + "." + m.getName()
+                                                          + "(" + m.getParameterTypes()[0].getName() + ")->" + m.getReturnType().getName());
+                                                      break;
+                                                  }
+                                              }
+                                          }
+                                      } catch (Throwable ignored) {
+                                      }
+                                  }
+                              }
+                          }
+                          log("DEX-SCAN", "Completed DEX scan on " + cl.getClass().getSimpleName()
+                              + " (totalClasses=" + totalClasses + ", matched=" + matchedClasses + ")");
+                      } catch (Throwable t) {
+                          logError("DexScan", t);
+                      }
+                  });
               }
 
               public static synchronized void flushPendingToProvider() {
@@ -1811,6 +1912,17 @@ jobs:
 
                   c.log("INIT", "Loaded HS Panel v4.2 (Incognia Stealth + OkHttp X-Device-Id Rotation & Order Auto-Accept) into "
                       + lpparam.packageName + " (SDK=" + Build.VERSION.SDK_INT + ")");
+
+                  try {
+                      final Thread.UncaughtExceptionHandler prevHandler = Thread.getDefaultUncaughtExceptionHandler();
+                      Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+                          c.logError("CRASH", e);
+                          if (prevHandler != null) {
+                              prevHandler.uncaughtException(t, e);
+                          }
+                      });
+                  } catch (Throwable ignored) {
+                  }
 
                   try {
                       b.initConsistentProfile(dataDir, cl);
